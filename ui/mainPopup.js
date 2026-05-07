@@ -11,6 +11,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { AccountRow } from './accountRow.js';
 import { EmptyState } from './emptyState.js';
 import { AddAccountDialog } from './addAccountDialog.js';
+import { ConfirmDeleteDialog } from './confirmDeleteDialog.js';
 import * as AccountManager from '../lib/accountManager.js';
 
 const REFRESH_INTERVAL_MS = 1000;
@@ -161,6 +162,7 @@ class MainPopup extends St.BoxLayout {
             for (const account of accounts) {
                 const row = new AccountRow(account, { codeFont, codeFontSize });
                 row.connect('code-copied', () => {});
+                row.connect('account-edit', (_w, id) => this._onEditAccount(id));
                 row.connect('account-delete', (_w, id) => this._onDeleteAccount(id));
                 row.connect('account-move-up', (_w, id) => {
                     AccountManager.moveAccountUp(id);
@@ -217,19 +219,37 @@ class MainPopup extends St.BoxLayout {
     _onAddAccount(tab = null) {
         const dialog = new AddAccountDialog();
         dialog.connect('account-added', () => this.refreshAccounts());
+        dialog.connect('account-updated', () => this.refreshAccounts());
         dialog.open();
         if (tab === 'manual') {
             dialog._switchTab('manual');
         }
     }
 
+    _onEditAccount(id) {
+        const account = AccountManager.getAccount(id);
+        if (!account) return;
+
+        const dialog = new AddAccountDialog(account);
+        dialog.connect('account-updated', () => this.refreshAccounts());
+        dialog.open();
+    }
+
     async _onDeleteAccount(id) {
-        try {
-            await AccountManager.deleteAccount(id);
-            this.refreshAccounts();
-        } catch (e) {
-            log(`[TOTP] Failed to delete account: ${e.message}`);
-        }
+        const account = AccountManager.getAccount(id);
+        if (!account) return;
+
+        const displayName = account.issuer || account.label || 'this account';
+        const confirmDialog = new ConfirmDeleteDialog(displayName);
+        confirmDialog.connect('confirmed', async () => {
+            try {
+                await AccountManager.deleteAccount(id);
+                this.refreshAccounts();
+            } catch (e) {
+                log(`[TOTP] Failed to delete account: ${e.message}`);
+            }
+        });
+        confirmDialog.open();
     }
 
     _onOpenSettings() {

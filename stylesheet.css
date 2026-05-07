@@ -527,3 +527,60 @@
     text-align: center;
     min-height: 20px;
 }
+
+/* ── Dropdown Buttons ── */
+.totp-dropdown-button {
+    padding: 10px 14px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 13px;
+    font-weight: 500;
+    transition-duration: 150ms;
+    text-align: left;
+}
+
+.totp-dropdown-button:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.20);
+}
+
+.totp-dropdown-button:active {
+    background-color: rgba(26, 115, 232, 0.2);
+    border-color: rgba(26, 115, 232, 0.4);
+    color: rgba(255, 255, 255, 1);
+}
+
+.totp-dropdown-button:focus {
+    border-color: rgba(26, 115, 232, 0.6);
+    background-color: rgba(26, 115, 232, 0.08);
+}
+
+/* ── Dropdown Containers ── */
+.totp-algorithm-box,
+.totp-digits-box,
+.totp-period-box {
+    spacing: 0;
+    x-expand: true;
+}
+
+.totp-hint-text {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.45);
+    margin-top: 4px;
+    font-style: italic;
+}
+
+/* ── Logo Preview ── */
+.totp-logo-preview {
+    padding: 12px;
+    border-radius: 8px;
+    background-color: rgba(26, 115, 232, 0.08);
+    border: 1px solid rgba(26, 115, 232, 0.2);
+    margin: 8px 0;
+}
+
+.totp-logo-icon {
+    color: rgba(26, 115, 232, 0.7);
+}

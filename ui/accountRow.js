@@ -2,30 +2,34 @@
 // Account Row — Single account list item widget
 // Displays issuer, label, OTP code, countdown arc, and copy button.
 
-import GObject from 'gi://GObject';
-import St from 'gi://St';
-import Clutter from 'gi://Clutter';
-import GLib from 'gi://GLib';
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import GObject from "gi://GObject";
+import St from "gi://St";
+import Clutter from "gi://Clutter";
+import Gio from "gi://Gio";
+import GLib from "gi://GLib";
+import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
+import * as Main from "resource:///org/gnome/shell/ui/main.js";
 
-import { generateTOTP, getTimeRemaining } from '../lib/totp.js';
-import * as AccountManager from '../lib/accountManager.js';
+import { generateTOTP, getTimeRemaining } from "../lib/totp.js";
+import * as AccountManager from "../lib/accountManager.js";
+import * as LogoFetcher from "../lib/logoFetcher.js";
 
 const COPY_FEEDBACK_DURATION_MS = 2000;
 const CLIPBOARD_CLEAR_TIMEOUT_S = 30;
 const EXPIRING_THRESHOLD_S = 7;
 
-export const AccountRow = GObject.registerClass({
+export const AccountRow = GObject.registerClass(
+  {
     Signals: {
-        'code-copied': { param_types: [GObject.TYPE_STRING] },
-        'account-edit': { param_types: [GObject.TYPE_STRING] },
-        'account-delete': { param_types: [GObject.TYPE_STRING] },
-        'account-move-up': { param_types: [GObject.TYPE_STRING] },
-        'account-move-down': { param_types: [GObject.TYPE_STRING] },
-        'request-refresh': {},
+      "code-copied": { param_types: [GObject.TYPE_STRING] },
+      "account-edit": { param_types: [GObject.TYPE_STRING] },
+      "account-delete": { param_types: [GObject.TYPE_STRING] },
+      "account-move-up": { param_types: [GObject.TYPE_STRING] },
+      "account-move-down": { param_types: [GObject.TYPE_STRING] },
+      "request-refresh": {},
     },
-}, class AccountRow extends St.BoxLayout {
+  },
+  class AccountRow extends St.BoxLayout {
     /**
      * @param {object} account - Account metadata object
      * @param {object} [options] - Display options
@@ -33,28 +37,28 @@ export const AccountRow = GObject.registerClass({
      * @param {number} [options.codeFontSize=28] - Font size for OTP code
      */
     _init(account, options = {}) {
-        super._init({
-            style_class: 'totp-account-row',
-            vertical: false,
-            reactive: true,
-            track_hover: true,
-            can_focus: true,
-            x_expand: true,
-        });
+      super._init({
+        style_class: "totp-account-row",
+        vertical: false,
+        reactive: true,
+        track_hover: true,
+        can_focus: true,
+        x_expand: true,
+      });
 
-        this._account = account;
-        this._currentCode = '';
-        this._codeFont = options.codeFont || 'Monospace';
-        this._codeFontSize = options.codeFontSize || 28;
-        this._clipboardTimeoutId = 0;
-        this._copyFeedbackTimeoutId = 0;
-        this._isDestroyed = false;
+      this._account = account;
+      this._currentCode = "";
+      this._codeFont = options.codeFont || "Monospace";
+      this._codeFontSize = options.codeFontSize || 28;
+      this._clipboardTimeoutId = 0;
+      this._copyFeedbackTimeoutId = 0;
+      this._isDestroyed = false;
 
-        this._buildUI();
-        this._setupContextMenu();
-        this._refreshCode();
+      this._buildUI();
+      this._setupContextMenu();
+      this._refreshCode();
 
-        this.connect('destroy', () => this._onDestroy());
+      this.connect("destroy", () => this._onDestroy());
     }
 
     /**
@@ -62,92 +66,96 @@ export const AccountRow = GObject.registerClass({
      * @private
      */
     _buildUI() {
-        // === Avatar (colored circle with initial letter) ===
-        const avatarLetter = (this._account.issuer || this._account.label || '?')[0].toUpperCase();
-        // Use a BoxLayout container for proper centering
-        this._avatar = new St.Bin({
-            style_class: 'totp-account-avatar',
-            style: `background-color: ${this._account.color || '#1a73e8'};`,
-            y_align: Clutter.ActorAlign.CENTER,
-            child: new St.Label({
-                text: avatarLetter,
-                style: 'font-size: 14px; font-weight: bold; color: white;',
-                y_align: Clutter.ActorAlign.CENTER,
-            }),
-        });
-        this.add_child(this._avatar);
+      // === Avatar (logo or colored circle with initial letter) ===
+      this._avatar = new St.Bin({
+        style_class: "totp-account-avatar",
+        style: `background-color: ${this._account.color || "#1a73e8"};`,
+        y_align: Clutter.ActorAlign.CENTER,
+        x_align: Clutter.ActorAlign.CENTER,
+      });
 
-        // === Info column (issuer + label + code) ===
-        const infoBox = new St.BoxLayout({
-            vertical: true,
-            x_expand: true,
-            style_class: 'totp-account-info',
-            y_align: Clutter.ActorAlign.CENTER,
-        });
+      // Try to load logo, fallback to letter avatar
+      if (this._account.logoUrl) {
+        this._setLogoAvatar(this._account.logoUrl);
+      } else {
+        this._setLetterAvatar();
+        // Try to fetch logo asynchronously
+        this._fetchAndSetLogo();
+      }
 
-        // Issuer name
-        this._issuerLabel = new St.Label({
-            text: this._account.issuer || 'Unknown',
-            style_class: 'totp-account-issuer',
-        });
-        infoBox.add_child(this._issuerLabel);
+      this.add_child(this._avatar);
 
-        // Account label / email
-        this._accountLabel = new St.Label({
-            text: this._account.label || '',
-            style_class: 'totp-account-label',
-        });
-        infoBox.add_child(this._accountLabel);
+      // === Info column (issuer + label + code) ===
+      const infoBox = new St.BoxLayout({
+        vertical: true,
+        x_expand: true,
+        style_class: "totp-account-info",
+        y_align: Clutter.ActorAlign.CENTER,
+      });
 
-        // OTP Code display
-        this._codeLabel = new St.Label({
-            text: '••• •••',
-            style_class: 'totp-account-code',
-            style: `font-family: ${this._codeFont}; font-size: ${this._codeFontSize}px;`,
-        });
-        infoBox.add_child(this._codeLabel);
+      // Issuer name
+      this._issuerLabel = new St.Label({
+        text: this._account.issuer || "Unknown",
+        style_class: "totp-account-issuer",
+      });
+      infoBox.add_child(this._issuerLabel);
 
-        this.add_child(infoBox);
+      // Account label / email
+      this._accountLabel = new St.Label({
+        text: this._account.label || "",
+        style_class: "totp-account-label",
+      });
+      infoBox.add_child(this._accountLabel);
 
-        // === Right side: countdown + copy button ===
-        const actionsBox = new St.BoxLayout({
-            vertical: true,
-            style_class: 'totp-account-actions',
-            y_align: Clutter.ActorAlign.CENTER,
-        });
+      // OTP Code display
+      this._codeLabel = new St.Label({
+        text: "••• •••",
+        style_class: "totp-account-code",
+        style: `font-family: ${this._codeFont}; font-size: ${this._codeFontSize}px;`,
+      });
+      infoBox.add_child(this._codeLabel);
 
-        // Countdown label
-        this._countdownLabel = new St.Label({
-            text: '',
-            style_class: 'totp-countdown-label',
-            x_align: Clutter.ActorAlign.CENTER,
-        });
-        actionsBox.add_child(this._countdownLabel);
+      this.add_child(infoBox);
 
-        // Progress arc (simple text-based for reliability)
-        this._progressBar = new St.DrawingArea({
-            width: 32,
-            height: 32,
-            style_class: 'totp-progress-arc',
-            x_align: Clutter.ActorAlign.CENTER,
-        });
-        this._progressBar.connect('repaint', () => this._paintArc());
-        actionsBox.add_child(this._progressBar);
+      // === Right side: countdown + copy button ===
+      const actionsBox = new St.BoxLayout({
+        vertical: true,
+        style_class: "totp-account-actions",
+        y_align: Clutter.ActorAlign.CENTER,
+      });
 
-        // Copy button
-        this._copyButton = new St.Button({
-            style_class: 'totp-copy-button',
-            child: new St.Icon({
-                icon_name: 'edit-copy-symbolic',
-                icon_size: 16,
-            }),
-            y_align: Clutter.ActorAlign.CENTER,
-            x_align: Clutter.ActorAlign.CENTER,
-        });
-        this._copyButton.connect('clicked', () => this._onCopyClicked());
-        actionsBox.add_child(this._copyButton);
+      // Countdown label
+      this._countdownLabel = new St.Label({
+        text: "",
+        style_class: "totp-countdown-label",
+        x_align: Clutter.ActorAlign.CENTER,
+      });
+      actionsBox.add_child(this._countdownLabel);
 
-        this.add_child(actionsBox);
+      // Progress arc (simple text-based for reliability)
+      this._progressBar = new St.DrawingArea({
+        width: 32,
+        height: 32,
+        style_class: "totp-progress-arc",
+        x_align: Clutter.ActorAlign.CENTER,
+      });
+      this._progressBar.connect("repaint", () => this._paintArc());
+      actionsBox.add_child(this._progressBar);
+
+      // Copy button
+      this._copyButton = new St.Button({
+        style_class: "totp-copy-button",
+        child: new St.Icon({
+          icon_name: "edit-copy-symbolic",
+          icon_size: 16,
+        }),
+        y_align: Clutter.ActorAlign.CENTER,
+        x_align: Clutter.ActorAlign.CENTER,
+      });
+      this._copyButton.connect("clicked", () => this._onCopyClicked());
+      actionsBox.add_child(this._copyButton);
+
+      this.add_child(actionsBox);
     }
 
     /**
@@ -155,65 +163,67 @@ export const AccountRow = GObject.registerClass({
      * @private
      */
     _paintArc() {
-        const cr = this._progressBar.get_context();
-        const [width, height] = this._progressBar.get_surface_size();
-        const centerX = width / 2;
-        const centerY = height / 2;
-        const radius = Math.min(width, height) / 2 - 3;
-        const lineWidth = 2.5;
+      const cr = this._progressBar.get_context();
+      const [width, height] = this._progressBar.get_surface_size();
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const radius = Math.min(width, height) / 2 - 3;
+      const lineWidth = 2.5;
 
-        const remaining = getTimeRemaining(this._account.period || 30);
-        const fraction = remaining / (this._account.period || 30);
+      const remaining = getTimeRemaining(this._account.period || 30);
+      const fraction = remaining / (this._account.period || 30);
 
-        // Clear
-        cr.setOperator(0); // CLEAR
-        cr.paint();
-        cr.setOperator(2); // OVER
+      // Clear
+      cr.setOperator(0); // CLEAR
+      cr.paint();
+      cr.setOperator(2); // OVER
 
-        // Background track
-        cr.setLineWidth(lineWidth);
-        cr.setLineCap(1); // ROUND
-        cr.setSourceRGBA(0.5, 0.5, 0.5, 0.15);
-        cr.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-        cr.stroke();
+      // Background track
+      cr.setLineWidth(lineWidth);
+      cr.setLineCap(1); // ROUND
+      cr.setSourceRGBA(0.5, 0.5, 0.5, 0.15);
+      cr.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+      cr.stroke();
 
-        // Progress arc
-        if (fraction > 0) {
-            let r, g, b;
-            if (remaining <= EXPIRING_THRESHOLD_S) {
-                // Amber to red
-                const t = 1 - (remaining / EXPIRING_THRESHOLD_S);
-                r = 0.91 + (0.80 - 0.91) * t;
-                g = 0.58 + (0.13 - 0.58) * t;
-                b = 0.04 + (0.13 - 0.04) * t;
-            } else {
-                // Accent blue
-                r = 0.10; g = 0.45; b = 0.91;
-            }
-
-            cr.setSourceRGBA(r, g, b, 0.9);
-            cr.setLineWidth(lineWidth);
-            cr.setLineCap(1);
-
-            const startAngle = -Math.PI / 2;
-            const endAngle = startAngle + (2 * Math.PI * fraction);
-            cr.arc(centerX, centerY, radius, startAngle, endAngle);
-            cr.stroke();
+      // Progress arc
+      if (fraction > 0) {
+        let r, g, b;
+        if (remaining <= EXPIRING_THRESHOLD_S) {
+          // Amber to red
+          const t = 1 - remaining / EXPIRING_THRESHOLD_S;
+          r = 0.91 + (0.8 - 0.91) * t;
+          g = 0.58 + (0.13 - 0.58) * t;
+          b = 0.04 + (0.13 - 0.04) * t;
+        } else {
+          // Accent blue
+          r = 0.1;
+          g = 0.45;
+          b = 0.91;
         }
 
-        // Seconds text
-        cr.setSourceRGBA(0.85, 0.85, 0.85, 0.9);
-        cr.selectFontFace('Sans', 0, 1); // NORMAL, BOLD
-        cr.setFontSize(10);
-        const text = `${remaining}`;
-        const extents = cr.textExtents(text);
-        cr.moveTo(
-            centerX - extents.width / 2 - extents.xBearing,
-            centerY - extents.height / 2 - extents.yBearing
-        );
-        cr.showText(text);
+        cr.setSourceRGBA(r, g, b, 0.9);
+        cr.setLineWidth(lineWidth);
+        cr.setLineCap(1);
 
-        cr.$dispose();
+        const startAngle = -Math.PI / 2;
+        const endAngle = startAngle + 2 * Math.PI * fraction;
+        cr.arc(centerX, centerY, radius, startAngle, endAngle);
+        cr.stroke();
+      }
+
+      // Seconds text
+      cr.setSourceRGBA(0.85, 0.85, 0.85, 0.9);
+      cr.selectFontFace("Sans", 0, 1); // NORMAL, BOLD
+      cr.setFontSize(10);
+      const text = `${remaining}`;
+      const extents = cr.textExtents(text);
+      cr.moveTo(
+        centerX - extents.width / 2 - extents.xBearing,
+        centerY - extents.height / 2 - extents.yBearing,
+      );
+      cr.showText(text);
+
+      cr.$dispose();
     }
 
     /**
@@ -221,14 +231,14 @@ export const AccountRow = GObject.registerClass({
      * @private
      */
     _setupContextMenu() {
-        // Use a PopupMenu for context actions
-        this.connect('button-press-event', (actor, event) => {
-            if (event.get_button() === Clutter.BUTTON_SECONDARY) {
-                this._showContextMenu(event);
-                return Clutter.EVENT_STOP;
-            }
-            return Clutter.EVENT_PROPAGATE;
-        });
+      // Use a PopupMenu for context actions
+      this.connect("button-press-event", (actor, event) => {
+        if (event.get_button() === Clutter.BUTTON_SECONDARY) {
+          this._showContextMenu(event);
+          return Clutter.EVENT_STOP;
+        }
+        return Clutter.EVENT_PROPAGATE;
+      });
     }
 
     /**
@@ -236,87 +246,88 @@ export const AccountRow = GObject.registerClass({
      * @private
      */
     _showContextMenu(event) {
-        // Create a simple context menu using GNOME Shell's popup menu system
-        if (this._contextMenu) {
-            this._contextMenu.destroy();
-        }
+      // Create a simple context menu using GNOME Shell's popup menu system
+      if (this._contextMenu) {
+        this._contextMenu.destroy();
+      }
 
-        this._contextMenu = new PopupMenu.PopupMenu(this, 0.5, St.Side.TOP);
+      this._contextMenu = new PopupMenu.PopupMenu(this, 0.5, St.Side.TOP);
 
-        const editItem = new PopupMenu.PopupMenuItem('Edit Account');
-        editItem.connect('activate', () => {
-            this.emit('account-edit', this._account.id);
-        });
-        this._contextMenu.addMenuItem(editItem);
+      const editItem = new PopupMenu.PopupMenuItem("Edit Account");
+      editItem.connect("activate", () => {
+        this.emit("account-edit", this._account.id);
+      });
+      this._contextMenu.addMenuItem(editItem);
 
-        const moveUpItem = new PopupMenu.PopupMenuItem('Move Up');
-        moveUpItem.connect('activate', () => {
-            this.emit('account-move-up', this._account.id);
-        });
-        this._contextMenu.addMenuItem(moveUpItem);
+      const moveUpItem = new PopupMenu.PopupMenuItem("Move Up");
+      moveUpItem.connect("activate", () => {
+        this.emit("account-move-up", this._account.id);
+      });
+      this._contextMenu.addMenuItem(moveUpItem);
 
-        const moveDownItem = new PopupMenu.PopupMenuItem('Move Down');
-        moveDownItem.connect('activate', () => {
-            this.emit('account-move-down', this._account.id);
-        });
-        this._contextMenu.addMenuItem(moveDownItem);
+      const moveDownItem = new PopupMenu.PopupMenuItem("Move Down");
+      moveDownItem.connect("activate", () => {
+        this.emit("account-move-down", this._account.id);
+      });
+      this._contextMenu.addMenuItem(moveDownItem);
 
-        this._contextMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+      this._contextMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        const deleteItem = new PopupMenu.PopupMenuItem('Delete Account');
-        deleteItem.connect('activate', () => {
-            this.emit('account-delete', this._account.id);
-        });
-        this._contextMenu.addMenuItem(deleteItem);
+      const deleteItem = new PopupMenu.PopupMenuItem("Delete Account");
+      deleteItem.connect("activate", () => {
+        this.emit("account-delete", this._account.id);
+      });
+      this._contextMenu.addMenuItem(deleteItem);
 
-        Main.uiGroup.add_child(this._contextMenu.actor);
-        this._contextMenu.open();
+      Main.uiGroup.add_child(this._contextMenu.actor);
+      this._contextMenu.open();
     }
 
     /**
      * Refresh the OTP code display.
      */
     _refreshCode() {
-        if (this._isDestroyed) return;
+      if (this._isDestroyed) return;
 
-        try {
-            // Get secret from keyring (sync for UI responsiveness)
-            const secret = AccountManager.getSecretSync(this._account.id);
-            if (!secret) {
-                this._codeLabel.text = 'No Key';
-                this._codeLabel.add_style_class_name('totp-code-error');
-                return;
-            }
-
-            // Generate TOTP code
-            const code = generateTOTP({
-                secret,
-                algorithm: this._account.algorithm || 'SHA1',
-                digits: this._account.digits || 6,
-                period: this._account.period || 30,
-            });
-
-            this._currentCode = code;
-
-            // Format code with space in middle (e.g., "482 301")
-            const mid = Math.ceil(code.length / 2);
-            this._codeLabel.text = `${code.substring(0, mid)} ${code.substring(mid)}`;
-
-            // Update countdown
-            const remaining = getTimeRemaining(this._account.period || 30);
-            this._countdownLabel.text = `${remaining}s`;
-
-            // Update visual state based on remaining time
-            this._updateExpiryState(remaining);
-
-            // Repaint arc
-            this._progressBar.queue_repaint();
-
-        } catch (e) {
-            this._codeLabel.text = 'Error';
-            this._codeLabel.add_style_class_name('totp-code-error');
-            log(`[TOTP] Code generation error for ${this._account.issuer}: ${e.message}`);
+      try {
+        // Get secret from keyring (sync for UI responsiveness)
+        const secret = AccountManager.getSecretSync(this._account.id);
+        if (!secret) {
+          this._codeLabel.text = "No Key";
+          this._codeLabel.add_style_class_name("totp-code-error");
+          return;
         }
+
+        // Generate TOTP code
+        const code = generateTOTP({
+          secret,
+          algorithm: this._account.algorithm || "SHA1",
+          digits: this._account.digits || 6,
+          period: this._account.period || 30,
+        });
+
+        this._currentCode = code;
+
+        // Format code with space in middle (e.g., "482 301")
+        const mid = Math.ceil(code.length / 2);
+        this._codeLabel.text = `${code.substring(0, mid)} ${code.substring(mid)}`;
+
+        // Update countdown
+        const remaining = getTimeRemaining(this._account.period || 30);
+        this._countdownLabel.text = `${remaining}s`;
+
+        // Update visual state based on remaining time
+        this._updateExpiryState(remaining);
+
+        // Repaint arc
+        this._progressBar.queue_repaint();
+      } catch (e) {
+        this._codeLabel.text = "Error";
+        this._codeLabel.add_style_class_name("totp-code-error");
+        log(
+          `[TOTP] Code generation error for ${this._account.issuer}: ${e.message}`,
+        );
+      }
     }
 
     /**
@@ -324,13 +335,13 @@ export const AccountRow = GObject.registerClass({
      * @private
      */
     _updateExpiryState(remaining) {
-        if (remaining <= EXPIRING_THRESHOLD_S) {
-            this._codeLabel.add_style_class_name('totp-code-expiring');
-            this._countdownLabel.add_style_class_name('totp-countdown-expiring');
-        } else {
-            this._codeLabel.remove_style_class_name('totp-code-expiring');
-            this._countdownLabel.remove_style_class_name('totp-countdown-expiring');
-        }
+      if (remaining <= EXPIRING_THRESHOLD_S) {
+        this._codeLabel.add_style_class_name("totp-code-expiring");
+        this._countdownLabel.add_style_class_name("totp-countdown-expiring");
+      } else {
+        this._codeLabel.remove_style_class_name("totp-code-expiring");
+        this._countdownLabel.remove_style_class_name("totp-countdown-expiring");
+      }
     }
 
     /**
@@ -338,23 +349,23 @@ export const AccountRow = GObject.registerClass({
      * @private
      */
     _onCopyClicked() {
-        if (!this._currentCode) return;
+      if (!this._currentCode) return;
 
-        // Copy to clipboard
-        const clipboard = St.Clipboard.get_default();
-        clipboard.set_text(St.ClipboardType.CLIPBOARD, this._currentCode);
+      // Copy to clipboard
+      const clipboard = St.Clipboard.get_default();
+      clipboard.set_text(St.ClipboardType.CLIPBOARD, this._currentCode);
 
-        // Update last used timestamp
-        AccountManager.touchAccount(this._account.id);
+      // Update last used timestamp
+      AccountManager.touchAccount(this._account.id);
 
-        // Show copy feedback
-        this._showCopyFeedback();
+      // Show copy feedback
+      this._showCopyFeedback();
 
-        // Schedule clipboard clear
-        this._scheduleClearClipboard();
+      // Schedule clipboard clear
+      this._scheduleClearClipboard();
 
-        // Emit signal
-        this.emit('code-copied', this._account.id);
+      // Emit signal
+      this.emit("code-copied", this._account.id);
     }
 
     /**
@@ -362,27 +373,27 @@ export const AccountRow = GObject.registerClass({
      * @private
      */
     _showCopyFeedback() {
-        const icon = this._copyButton.child;
-        icon.icon_name = 'emblem-ok-symbolic';
-        this._copyButton.add_style_class_name('totp-copy-success');
+      const icon = this._copyButton.child;
+      icon.icon_name = "emblem-ok-symbolic";
+      this._copyButton.add_style_class_name("totp-copy-success");
 
-        // Clear previous feedback timeout
-        if (this._copyFeedbackTimeoutId) {
-            GLib.source_remove(this._copyFeedbackTimeoutId);
-        }
+      // Clear previous feedback timeout
+      if (this._copyFeedbackTimeoutId) {
+        GLib.source_remove(this._copyFeedbackTimeoutId);
+      }
 
-        this._copyFeedbackTimeoutId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT,
-            COPY_FEEDBACK_DURATION_MS,
-            () => {
-                if (!this._isDestroyed) {
-                    icon.icon_name = 'edit-copy-symbolic';
-                    this._copyButton.remove_style_class_name('totp-copy-success');
-                }
-                this._copyFeedbackTimeoutId = 0;
-                return GLib.SOURCE_REMOVE;
-            }
-        );
+      this._copyFeedbackTimeoutId = GLib.timeout_add(
+        GLib.PRIORITY_DEFAULT,
+        COPY_FEEDBACK_DURATION_MS,
+        () => {
+          if (!this._isDestroyed) {
+            icon.icon_name = "edit-copy-symbolic";
+            this._copyButton.remove_style_class_name("totp-copy-success");
+          }
+          this._copyFeedbackTimeoutId = 0;
+          return GLib.SOURCE_REMOVE;
+        },
+      );
     }
 
     /**
@@ -390,32 +401,35 @@ export const AccountRow = GObject.registerClass({
      * @private
      */
     _scheduleClearClipboard() {
-        if (this._clipboardTimeoutId) {
-            GLib.source_remove(this._clipboardTimeoutId);
-        }
+      if (this._clipboardTimeoutId) {
+        GLib.source_remove(this._clipboardTimeoutId);
+      }
 
-        this._clipboardTimeoutId = GLib.timeout_add_seconds(
-            GLib.PRIORITY_DEFAULT,
-            CLIPBOARD_CLEAR_TIMEOUT_S,
-            () => {
-                if (!this._isDestroyed) {
-                    const clipboard = St.Clipboard.get_default();
-                    clipboard.set_text(St.ClipboardType.CLIPBOARD, '');
+      this._clipboardTimeoutId = GLib.timeout_add_seconds(
+        GLib.PRIORITY_DEFAULT,
+        CLIPBOARD_CLEAR_TIMEOUT_S,
+        () => {
+          if (!this._isDestroyed) {
+            const clipboard = St.Clipboard.get_default();
+            clipboard.set_text(St.ClipboardType.CLIPBOARD, "");
 
-                    // Show notification
-                    Main.notify('TOTP Authenticator', 'OTP code cleared from clipboard');
-                }
-                this._clipboardTimeoutId = 0;
-                return GLib.SOURCE_REMOVE;
-            }
-        );
+            // Show notification
+            Main.notify(
+              "TOTP Authenticator",
+              "OTP code cleared from clipboard",
+            );
+          }
+          this._clipboardTimeoutId = 0;
+          return GLib.SOURCE_REMOVE;
+        },
+      );
     }
 
     /**
      * Update the display (called by parent timer).
      */
     refresh() {
-        this._refreshCode();
+      this._refreshCode();
     }
 
     /**
@@ -423,7 +437,7 @@ export const AccountRow = GObject.registerClass({
      * @returns {string}
      */
     get accountId() {
-        return this._account.id;
+      return this._account.id;
     }
 
     /**
@@ -431,7 +445,71 @@ export const AccountRow = GObject.registerClass({
      * @returns {object}
      */
     get account() {
-        return this._account;
+      return this._account;
+    }
+
+    /**
+     * Set avatar with a logo image.
+     * @private
+     */
+    _setLogoAvatar(logoUrl) {
+      try {
+        const icon = new St.Icon({
+          gicon: logoUrl.startsWith("http")
+            ? null
+            : Gio.icon_new_for_string(logoUrl),
+          icon_size: 32,
+        });
+
+        // For URLs, use a custom image actor
+        if (logoUrl.startsWith("http")) {
+          const image = new Clutter.Image();
+          // Fetch image data from URL (simplified)
+          this._avatar.child = new St.Icon({
+            icon_name: "document-properties-symbolic",
+            icon_size: 32,
+          });
+        } else {
+          this._avatar.child = icon;
+        }
+      } catch (e) {
+        this._setLetterAvatar();
+      }
+    }
+
+    /**
+     * Set avatar with a letter (fallback).
+     * @private
+     */
+    _setLetterAvatar() {
+      const avatarLetter = (this._account.issuer ||
+        this._account.label ||
+        "?")[0].toUpperCase();
+      this._avatar.child = new St.Label({
+        text: avatarLetter,
+        style: "font-size: 14px; font-weight: bold; color: white;",
+        y_align: Clutter.ActorAlign.CENTER,
+        x_align: Clutter.ActorAlign.CENTER,
+      });
+    }
+
+    /**
+     * Fetch logo asynchronously and update avatar.
+     * @private
+     */
+    async _fetchAndSetLogo() {
+      try {
+        // Use siteUrl if available, otherwise use issuer
+        const logoUrl = await LogoFetcher.fetchLogoUrl(
+          this._account.siteUrl || this._account.issuer,
+        );
+        if (logoUrl && !this._isDestroyed) {
+          this._account.logoUrl = logoUrl;
+          this._setLogoAvatar(logoUrl);
+        }
+      } catch (e) {
+        // Silently fail, keep letter avatar
+      }
     }
 
     /**
@@ -439,21 +517,22 @@ export const AccountRow = GObject.registerClass({
      * @private
      */
     _onDestroy() {
-        this._isDestroyed = true;
+      this._isDestroyed = true;
 
-        if (this._clipboardTimeoutId) {
-            GLib.source_remove(this._clipboardTimeoutId);
-            this._clipboardTimeoutId = 0;
-        }
+      if (this._clipboardTimeoutId) {
+        GLib.source_remove(this._clipboardTimeoutId);
+        this._clipboardTimeoutId = 0;
+      }
 
-        if (this._copyFeedbackTimeoutId) {
-            GLib.source_remove(this._copyFeedbackTimeoutId);
-            this._copyFeedbackTimeoutId = 0;
-        }
+      if (this._copyFeedbackTimeoutId) {
+        GLib.source_remove(this._copyFeedbackTimeoutId);
+        this._copyFeedbackTimeoutId = 0;
+      }
 
-        if (this._contextMenu) {
-            this._contextMenu.destroy();
-            this._contextMenu = null;
-        }
+      if (this._contextMenu) {
+        this._contextMenu.destroy();
+        this._contextMenu = null;
+      }
     }
-});
+  },
+);
