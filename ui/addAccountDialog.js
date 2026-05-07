@@ -5,11 +5,12 @@ import GObject from 'gi://GObject';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
 import * as AccountManager from '../lib/accountManager.js';
 import * as QRScanner from '../lib/qrScanner.js';
-import { parseOTPAuthURI } from '../lib/otpauth.js';
+import { parseOtpauthUri } from '../lib/otpauth.js';
 
 export const AddAccountDialog = GObject.registerClass({
     Signals: {
@@ -79,6 +80,14 @@ export const AddAccountDialog = GObject.registerClass({
         });
         this._cameraBtn.connect('clicked', () => this._onScanCamera());
         this._qrTab.add_child(this._cameraBtn);
+
+        // File upload button
+        this._fileBtn = new St.Button({
+            label: 'Upload QR Code Image',
+            styleClass: 'totp-dialog-button',
+        });
+        this._fileBtn.connect('clicked', () => this._onUploadFile());
+        this._qrTab.add_child(this._fileBtn);
 
         // Check dependencies and show warning if needed
         const deps = QRScanner.checkDependencies();
@@ -205,9 +214,61 @@ export const AddAccountDialog = GObject.registerClass({
         }
     }
 
+    async _onUploadFile() {
+        // Check for available file picker
+        const hasZenity = QRScanner.isProgramAvailable('zenity');
+        const hasKdialog = QRScanner.isProgramAvailable('kdialog');
+
+        if (!hasZenity && !hasKdialog) {
+            this._statusLabel.text = 'Error: Install zenity (or kdialog) to use file picker. Run: sudo apt install zenity';
+            return;
+        }
+
+        // Temporarily close this dialog to allow file picker to work
+        this.close();
+
+        try {
+            let proc;
+            if (hasZenity) {
+                proc = Gio.Subprocess.new(
+                    ['zenity', '--file-selection', '--title=Select QR Code Image', '--file-filter=Images | *.png *.jpg *.jpeg *.gif *.bmp *.webp'],
+                    Gio.SubprocessFlags.STDOUT_PIPE
+                );
+            } else {
+                proc = Gio.Subprocess.new(
+                    ['kdialog', '--getopenfilename', '', 'Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)'],
+                    Gio.SubprocessFlags.STDOUT_PIPE
+                );
+            }
+
+            const [success, stdout, stderr] = await proc.communicate_utf8_async(null, null);
+
+            // Always reopen the dialog first
+            this.open();
+
+            if (!success || !stdout.trim()) {
+                this._statusLabel.text = 'File selection cancelled';
+                return;
+            }
+
+            const filePath = stdout.trim();
+            log(`[TOTP] Selected file: ${filePath}`);
+
+            this._statusLabel.text = 'Scanning image...';
+
+            const result = await QRScanner.scanFile(filePath);
+            log(`[TOTP] QR scan result: ${result}`);
+            await this._handleQRResult(result);
+        } catch (e) {
+            log(`[TOTP] File upload error: ${e.message}`);
+            this.open();
+            this._statusLabel.text = `Error: ${e.message}`;
+        }
+    }
+
     async _handleQRResult(uri) {
         try {
-            const params = parseOTPAuthURI(uri);
+            const params = parseOtpauthUri(uri);
             if (!params) {
                 this._statusLabel.text = 'Invalid QR code format';
                 return;

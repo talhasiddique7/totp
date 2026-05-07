@@ -218,25 +218,166 @@ export default class TOTPPreferences extends ExtensionPreferences {
         });
         window.add(aboutPage);
 
-        const aboutGroup = new Adw.PreferencesGroup({
-            title: 'GNOME TOTP Authenticator',
-            description: 'A native TOTP authenticator for the GNOME desktop.\n\nVersion 1.0.0\nLicense: GPL-3.0-or-later',
-        });
+        // Main about group with centered content
+        const aboutGroup = new Adw.PreferencesGroup();
         aboutPage.add(aboutGroup);
 
+        // Logo and title box
+        const headerBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 12,
+            halign: Gtk.Align.CENTER,
+            margin_top: 24,
+            margin_bottom: 12,
+        });
+
+        // App icon
+        const iconPath = GLib.build_filenamev([this.path, 'icons', 'shield-symbolic.svg']);
+        const iconFile = Gio.File.new_for_path(iconPath);
+        const icon = new Gtk.Image({
+            gicon: new Gio.FileIcon({ file: iconFile }),
+            pixel_size: 96,
+        });
+        icon.set_valign(Gtk.Align.CENTER);
+        headerBox.append(icon);
+
+        // App name
+        const titleLabel = new Gtk.Label({
+            label: 'TOTP Authenticator',
+            css_classes: ['title-1'],
+        });
+        titleLabel.set_valign(Gtk.Align.CENTER);
+        headerBox.append(titleLabel);
+
+        // Author
+        const authorLabel = new Gtk.Label({
+            label: 'talhasiddique7',
+            css_classes: ['dim-label'],
+        });
+        headerBox.append(authorLabel);
+
+        // Version badge
+        const versionBox = new Gtk.Box({
+            halign: Gtk.Align.CENTER,
+            margin_top: 8,
+        });
+        const versionLabel = new Gtk.Label({
+            label: 'Version 1.0',
+            css_classes: ['app-version'],
+        });
+        versionBox.append(versionLabel);
+        headerBox.append(versionBox);
+
+        aboutGroup.add(headerBox);
+
+        // Links group
         const linksGroup = new Adw.PreferencesGroup({
-            title: 'Links',
+            margin_top: 24,
         });
         aboutPage.add(linksGroup);
 
-        const rfcRow = new Adw.ActionRow({
-            title: 'RFC 6238 (TOTP Standard)',
-            subtitle: 'https://datatracker.ietf.org/doc/html/rfc6238',
+        // Read me / README
+        const readmeRow = new Adw.ActionRow({
+            title: 'Read me',
             activatable: true,
         });
-        rfcRow.add_suffix(new Gtk.Image({
+        readmeRow.add_prefix(new Gtk.Image({
+            icon_name: 'document-open-symbolic',
+        }));
+        readmeRow.add_suffix(new Gtk.Image({
+            icon_name: 'external-link-symbolic',
+        }));
+        readmeRow.connect('activated', () => {
+            Gio.AppInfo.launch_default_for_uri(
+                'https://github.com/talhasiddique7/totp#readme',
+                null
+            );
+        });
+        linksGroup.add(readmeRow);
+
+        // Report an Issue
+        const issueRow = new Adw.ActionRow({
+            title: 'Report an Issue',
+            activatable: true,
+        });
+        issueRow.add_prefix(new Gtk.Image({
+            icon_name: 'bug-symbolic',
+        }));
+        issueRow.add_suffix(new Gtk.Image({
+            icon_name: 'external-link-symbolic',
+        }));
+        issueRow.connect('activated', () => {
+            Gio.AppInfo.launch_default_for_uri(
+                'https://github.com/talhasiddique7/totp/issues',
+                null
+            );
+        });
+        linksGroup.add(issueRow);
+
+        // View sources on GitHub
+        const githubRow = new Adw.ActionRow({
+            title: 'View sources on GitHub',
+            activatable: true,
+        });
+        githubRow.add_prefix(new Gtk.Image({
+            icon_name: 'folder-download-symbolic',
+        }));
+        githubRow.add_suffix(new Gtk.Image({
+            icon_name: 'external-link-symbolic',
+        }));
+        githubRow.connect('activated', () => {
+            Gio.AppInfo.launch_default_for_uri(
+                'https://github.com/talhasiddique7/totp',
+                null
+            );
+        });
+        linksGroup.add(githubRow);
+
+        // Author profile
+        const authorRow = new Adw.ActionRow({
+            title: 'Author Profile',
+            activatable: true,
+        });
+        authorRow.add_prefix(new Gtk.Image({
+            icon_name: 'user-info-symbolic',
+        }));
+        authorRow.add_suffix(new Gtk.Image({
             icon_name: 'go-next-symbolic',
         }));
-        linksGroup.add(rfcRow);
+        authorRow.connect('activated', () => {
+            Gio.AppInfo.launch_default_for_uri(
+                'https://github.com/talhasiddique7',
+                null
+            );
+        });
+        linksGroup.add(authorRow);
+
+        // Legal group
+        const legalGroup = new Adw.PreferencesGroup({
+            title: 'Legal',
+            margin_top: 12,
+        });
+        aboutPage.add(legalGroup);
+
+        // License
+        const licenseRow = new Adw.ActionRow({
+            title: 'License',
+            subtitle: 'GPL-3.0-or-later',
+        });
+        legalGroup.add(licenseRow);
+
+        // Logo attribution
+        const logoRow = new Adw.ActionRow({
+            title: 'Logo',
+            subtitle: 'by Freepik — flaticon.com',
+            activatable: true,
+        });
+        logoRow.connect('activated', () => {
+            Gio.AppInfo.launch_default_for_uri(
+                'https://www.flaticon.com',
+                null
+            );
+        });
+        legalGroup.add(logoRow);
     }
 }

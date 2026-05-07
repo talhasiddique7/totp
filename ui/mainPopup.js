@@ -234,8 +234,8 @@ class MainPopup extends St.BoxLayout {
 
     _onOpenSettings() {
         try {
-            const proc = new GLib.spawn_command_line_async(
-                'gnome-extensions prefs gnome-totp-authenticator@local'
+            GLib.spawn_command_line_async(
+                'gnome-extensions prefs gnome-totp-authenticator@talhasiddique7'
             );
         } catch (e) {
             log(`[TOTP] Failed to open settings: ${e.message}`);

@@ -64,11 +64,16 @@ export const AccountRow = GObject.registerClass({
     _buildUI() {
         // === Avatar (colored circle with initial letter) ===
         const avatarLetter = (this._account.issuer || this._account.label || '?')[0].toUpperCase();
-        this._avatar = new St.Label({
-            text: avatarLetter,
+        // Use a BoxLayout container for proper centering
+        this._avatar = new St.Bin({
             style_class: 'totp-account-avatar',
             style: `background-color: ${this._account.color || '#1a73e8'};`,
             y_align: Clutter.ActorAlign.CENTER,
+            child: new St.Label({
+                text: avatarLetter,
+                style: 'font-size: 14px; font-weight: bold; color: white;',
+                y_align: Clutter.ActorAlign.CENTER,
+            }),
         });
         this.add_child(this._avatar);
 
