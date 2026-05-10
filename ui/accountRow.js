@@ -18,6 +18,10 @@ const COPY_FEEDBACK_DURATION_MS = 2000;
 const CLIPBOARD_CLEAR_TIMEOUT_S = 30;
 const EXPIRING_THRESHOLD_S = 7;
 
+function cssQuotedFontFamily(fontFamily) {
+  return `"${String(fontFamily || "Monospace").replace(/["\\]/g, "")}"`;
+}
+
 export const AccountRow = GObject.registerClass(
   {
     Signals: {
@@ -50,6 +54,7 @@ export const AccountRow = GObject.registerClass(
       this._currentCode = "";
       this._codeFont = options.codeFont || "Monospace";
       this._codeFontSize = options.codeFontSize || 28;
+      this._showNotifications = options.showNotifications ?? true;
       this._clipboardTimeoutId = 0;
       this._copyFeedbackTimeoutId = 0;
       this._isDestroyed = false;
@@ -111,7 +116,7 @@ export const AccountRow = GObject.registerClass(
       this._codeLabel = new St.Label({
         text: "••• •••",
         style_class: "totp-account-code",
-        style: `font-family: ${this._codeFont}; font-size: ${this._codeFontSize}px;`,
+        style: `font-family: ${cssQuotedFontFamily(this._codeFont)}; font-size: ${this._codeFontSize}px;`,
       });
       infoBox.add_child(this._codeLabel);
 
@@ -255,6 +260,7 @@ export const AccountRow = GObject.registerClass(
 
       const editItem = new PopupMenu.PopupMenuItem("Edit Account");
       editItem.connect("activate", () => {
+        log(`[TOTP] Emitting account-edit for id=${this._account.id}`);
         this.emit("account-edit", this._account.id);
       });
       this._contextMenu.addMenuItem(editItem);
@@ -275,6 +281,7 @@ export const AccountRow = GObject.registerClass(
 
       const deleteItem = new PopupMenu.PopupMenuItem("Delete Account");
       deleteItem.connect("activate", () => {
+        log(`[TOTP] Emitting account-delete for id=${this._account.id}`);
         this.emit("account-delete", this._account.id);
       });
       this._contextMenu.addMenuItem(deleteItem);
@@ -413,11 +420,12 @@ export const AccountRow = GObject.registerClass(
             const clipboard = St.Clipboard.get_default();
             clipboard.set_text(St.ClipboardType.CLIPBOARD, "");
 
-            // Show notification
-            Main.notify(
-              "TOTP Authenticator",
-              "OTP code cleared from clipboard",
-            );
+            if (this._showNotifications) {
+              Main.notify(
+                "TOTP Authenticator",
+                "OTP code cleared from clipboard",
+              );
+            }
           }
           this._clipboardTimeoutId = 0;
           return GLib.SOURCE_REMOVE;
@@ -463,8 +471,7 @@ export const AccountRow = GObject.registerClass(
 
         // For URLs, use a custom image actor
         if (logoUrl.startsWith("http")) {
-          const image = new Clutter.Image();
-          // Fetch image data from URL (simplified)
+          // Remote icon loading is intentionally conservative in Shell UI.
           this._avatar.child = new St.Icon({
             icon_name: "document-properties-symbolic",
             icon_size: 32,

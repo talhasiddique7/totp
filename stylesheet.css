@@ -443,7 +443,7 @@
 
 /* ── Add Account Dialog ── */
 .totp-add-account-dialog {
-    min-width: 360px;
+    min-width: 520px;
 }
 
 .totp-dialog-content {
@@ -479,7 +479,7 @@
 }
 
 .totp-tab-content {
-    spacing: 12px;
+    spacing: 8px;
 }
 
 .totp-dialog-button {
@@ -502,10 +502,15 @@
     background-color: rgba(26, 115, 232, 1);
 }
 
+.totp-form-row {
+    spacing: 12px;
+    x-expand: true;
+}
+
 .totp-field-label {
     font-size: 12px;
     color: rgba(255, 255, 255, 0.6);
-    margin-top: 4px;
+    margin-bottom: 2px;
 }
 
 .totp-entry {
@@ -513,6 +518,10 @@
     border-radius: 6px;
     background-color: rgba(255, 255, 255, 0.08);
     color: rgba(255, 255, 255, 0.95);
+}
+
+.totp-secret-row {
+    spacing: 8px;
 }
 
 .totp-dialog-warning {
@@ -530,7 +539,7 @@
 
 /* ── Dropdown Buttons ── */
 .totp-dropdown-button {
-    padding: 10px 14px;
+    padding: 8px 12px;
     border-radius: 8px;
     background-color: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -574,13 +583,80 @@
 
 /* ── Logo Preview ── */
 .totp-logo-preview {
-    padding: 12px;
+    padding: 8px;
     border-radius: 8px;
     background-color: rgba(26, 115, 232, 0.08);
     border: 1px solid rgba(26, 115, 232, 0.2);
-    margin: 8px 0;
+    margin: 4px 0;
 }
 
 .totp-logo-icon {
     color: rgba(26, 115, 232, 0.7);
+}
+
+/* ── Current Add/Edit Account Dialog ── */
+.totp-dialog-root {
+    min-width: 540px;
+}
+
+.totp-dialog-titlebar {
+    padding: 0 0 18px 0;
+    spacing: 0;
+}
+
+.totp-dialog-icon {
+    icon-size: 28px;
+    color: #f5a623;
+    margin-right: 10px;
+}
+
+.totp-dialog-subtitle {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.45);
+    margin-top: 1px;
+}
+
+.totp-btn-primary {
+    background-color: #f5a623;
+    border: none;
+    border-radius: 8px;
+    color: #1a1208;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 11px 24px;
+    margin-top: 6px;
+}
+
+.totp-btn-primary:hover {
+    background-color: #ffc14a;
+}
+
+.totp-btn-primary:active {
+    background-color: #d4901a;
+}
+
+.totp-status {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+    margin-top: 10px;
+}
+
+.totp-status-ok {
+    color: #6bffb8;
+}
+
+.totp-coming-soon-pill {
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    padding: 5px 14px;
+    margin-bottom: 18px;
+}
+
+.totp-section-divider {
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.35);
+    margin-bottom: 12px;
+    margin-top: 4px;
 }

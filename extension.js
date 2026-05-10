@@ -17,6 +17,7 @@ export default class TOTPAuthenticatorExtension extends Extension {
         this._settings = null;
         this._screenSaverProxy = null;
         this._screenSaverSignalId = 0;
+        this._settingsSignalIds = [];
     }
 
     enable() {
@@ -38,23 +39,30 @@ export default class TOTPAuthenticatorExtension extends Extension {
         }
 
         // Listen for setting changes
-        this._settings.connect('changed::lock-on-screen-lock', () => {
+        this._settingsSignalIds.push(this._settings.connect('changed::lock-on-screen-lock', () => {
             if (this._settings.get_boolean('lock-on-screen-lock')) {
                 this._setupScreenLockListener();
             } else {
                 this._teardownScreenLockListener();
             }
-        });
+        }));
 
-        this._settings.connect('changed::popup-width', () => {
+        this._settingsSignalIds.push(this._settings.connect('changed::popup-width', () => {
             if (this._panelButton && this._panelButton._mainPopup) {
                 const width = this._settings.get_int('popup-width');
                 this._panelButton._mainPopup.style = `width: ${width}px;`;
             }
-        });
+        }));
     }
 
     disable() {
+        if (this._settings) {
+            for (const signalId of this._settingsSignalIds) {
+                this._settings.disconnect(signalId);
+            }
+            this._settingsSignalIds = [];
+        }
+
         // Destroy panel button
         if (this._panelButton) {
             this._panelButton.destroy();

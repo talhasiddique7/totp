@@ -63,6 +63,7 @@ export const EmptyState = GObject.registerClass({
             label: 'Scan QR Code',
             style_class: 'totp-button totp-button-primary',
             can_focus: true,
+            reactive: true,
         });
         scanButton.connect('clicked', () => this.emit('scan-qr'));
         buttonBox.add_child(scanButton);
@@ -71,6 +72,7 @@ export const EmptyState = GObject.registerClass({
             label: 'Enter Manually',
             style_class: 'totp-button totp-button-secondary',
             can_focus: true,
+            reactive: true,
         });
         manualButton.connect('clicked', () => this.emit('enter-manually'));
         buttonBox.add_child(manualButton);

@@ -16,6 +16,17 @@ import * as AccountManager from '../lib/accountManager.js';
 
 const REFRESH_INTERVAL_MS = 1000;
 
+function entryText(entry) {
+    try {
+        if (entry.clutter_text && typeof entry.clutter_text.get_text === 'function') {
+            return entry.clutter_text.get_text() || '';
+        }
+        return entry.get_text?.() || entry.text || '';
+    } catch (e) {
+        return '';
+    }
+}
+
 export const MainPopup = GObject.registerClass(
 class MainPopup extends St.BoxLayout {
     _init(settings, path) {
@@ -66,6 +77,7 @@ class MainPopup extends St.BoxLayout {
             style_class: 'totp-header-button',
             child: new St.Icon({ icon_name: 'list-add-symbolic', icon_size: 16 }),
             y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
         });
         addButton.connect('clicked', () => this._onAddAccount());
         header.add_child(addButton);
@@ -75,6 +87,7 @@ class MainPopup extends St.BoxLayout {
             style_class: 'totp-header-button',
             child: new St.Icon({ icon_name: 'emblem-system-symbolic', icon_size: 16 }),
             y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
         });
         settingsButton.connect('clicked', () => this._onOpenSettings());
         header.add_child(settingsButton);
@@ -158,9 +171,16 @@ class MainPopup extends St.BoxLayout {
             const codeFontSize = this._settings
                 ? this._settings.get_int('code-size')
                 : 28;
+            const showNotifications = this._settings
+                ? this._settings.get_boolean('show-notifications')
+                : true;
 
             for (const account of accounts) {
-                const row = new AccountRow(account, { codeFont, codeFontSize });
+                const row = new AccountRow(account, {
+                    codeFont,
+                    codeFontSize,
+                    showNotifications,
+                });
                 row.connect('code-copied', () => {});
                 row.connect('account-edit', (_w, id) => this._onEditAccount(id));
                 row.connect('account-delete', (_w, id) => this._onDeleteAccount(id));
@@ -205,7 +225,7 @@ class MainPopup extends St.BoxLayout {
     }
 
     _onSearchChanged() {
-        const query = this._searchEntry.get_text().toLowerCase().trim();
+        const query = entryText(this._searchEntry).toLowerCase().trim();
         this._accountRows.forEach(row => {
             const acct = row.account;
             const match = !query ||
@@ -217,33 +237,57 @@ class MainPopup extends St.BoxLayout {
     }
 
     _onAddAccount(tab = null) {
+        log(`[TOTP] _onAddAccount called with tab=${tab}`);
         const dialog = new AddAccountDialog();
-        dialog.connect('account-added', () => this.refreshAccounts());
-        dialog.connect('account-updated', () => this.refreshAccounts());
+        log('[TOTP] AddAccountDialog created');
+        dialog.connect('account-added', () => {
+            log('[TOTP] account-added signal received');
+            this.refreshAccounts();
+        });
+        dialog.connect('account-updated', () => {
+            log('[TOTP] account-updated signal received');
+            this.refreshAccounts();
+        });
         dialog.open();
-        if (tab === 'manual') {
-            dialog._switchTab('manual');
+        log('[TOTP] AddAccountDialog opened');
+        if (tab === 'manual' && dialog._issuerEntry) {
+            dialog._issuerEntry.grab_key_focus();
         }
     }
 
     _onEditAccount(id) {
+        log(`[TOTP] _onEditAccount called with id=${id}`);
         const account = AccountManager.getAccount(id);
-        if (!account) return;
+        if (!account) {
+            log(`[TOTP] _onEditAccount: account not found for id=${id}`);
+            return;
+        }
+        log(`[TOTP] _onEditAccount: opening dialog for issuer=${account.issuer}`);
 
-        const dialog = new AddAccountDialog(account);
-        dialog.connect('account-updated', () => this.refreshAccounts());
+        const dialog = new AddAccountDialog();
+        dialog.setAccount(account);
+        dialog.connect('account-updated', () => {
+            log('[TOTP] account-updated signal received, refreshing');
+            this.refreshAccounts();
+        });
         dialog.open();
     }
 
     async _onDeleteAccount(id) {
+        log(`[TOTP] _onDeleteAccount called with id=${id}`);
         const account = AccountManager.getAccount(id);
-        if (!account) return;
+        if (!account) {
+            log(`[TOTP] _onDeleteAccount: account not found for id=${id}`);
+            return;
+        }
 
         const displayName = account.issuer || account.label || 'this account';
         const confirmDialog = new ConfirmDeleteDialog(displayName);
         confirmDialog.connect('confirmed', async () => {
+            log('[TOTP] Delete confirmed');
             try {
-                await AccountManager.deleteAccount(id);
+                const result = await AccountManager.deleteAccount(id);
+                log(`[TOTP] deleteAccount result=${result}`);
                 this.refreshAccounts();
             } catch (e) {
                 log(`[TOTP] Failed to delete account: ${e.message}`);

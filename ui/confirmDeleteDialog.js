@@ -20,20 +20,20 @@ export const ConfirmDeleteDialog = GObject.registerClass(
 
       const content = new St.BoxLayout({
         vertical: true,
-        styleClass: "totp-dialog-content",
+        style_class: "totp-dialog-content",
       });
 
       content.add_child(
         new St.Label({
           text: "Delete Account",
-          styleClass: "totp-dialog-title",
+          style_class: "totp-dialog-title",
         }),
       );
 
       content.add_child(
         new St.Label({
           text: `Are you sure you want to delete ${accountName}?`,
-          styleClass: "totp-dialog-status",
+          style_class: "totp-dialog-status",
         }),
       );
 

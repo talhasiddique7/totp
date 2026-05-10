@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Add Account Dialog — Modal dialog for adding TOTP accounts
+// Add Account Dialog — Modal dialog for adding/editing TOTP accounts
 
 import GObject from "gi://GObject";
 import St from "gi://St";
@@ -9,9 +9,36 @@ import Gio from "gi://Gio";
 import * as ModalDialog from "resource:///org/gnome/shell/ui/modalDialog.js";
 
 import * as AccountManager from "../lib/accountManager.js";
-import * as QRScanner from "../lib/qrScanner.js";
 import * as LogoFetcher from "../lib/logoFetcher.js";
-import { parseOtpauthUri } from "../lib/otpauth.js";
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Safely read text from an St.Entry regardless of GNOME Shell version.
+ * Some builds expose .text directly; others require going through clutter_text.
+ */
+function entryGetText(entry) {
+  try {
+    if (entry.clutter_text && typeof entry.clutter_text.get_text === "function") {
+      return entry.clutter_text.get_text() ?? "";
+    }
+    return entry.get_text?.() ?? entry.text ?? "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function entrySetText(entry, value) {
+  try {
+    if (entry.clutter_text && typeof entry.clutter_text.set_text === "function") {
+      entry.clutter_text.set_text(value ?? "");
+      return;
+    }
+    entry.set_text?.(value ?? "");
+  } catch (_) {}
+}
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export const AddAccountDialog = GObject.registerClass(
   {
@@ -21,608 +48,490 @@ export const AddAccountDialog = GObject.registerClass(
     },
   },
   class AddAccountDialog extends ModalDialog.ModalDialog {
-    _init(account = null) {
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────
+
+    _init() {
       super._init({
         styleClass: "totp-add-account-dialog",
         destroyOnClose: true,
       });
 
-      this._editingAccount = account;
-      this._currentTab = "manual";
-      this._selectedLogoUrl = null;
+      this._editingAccount    = null;
+      this._selectedLogoUrl   = null;
       this._logoFetchTimeoutId = 0;
+      this._selectedAlgorithm = "SHA1";
+      this._selectedDigits    = 6;
+      this._selectedPeriod    = 30;
+      this._busy              = false;
+
       this._buildUI();
-      this._switchTab("manual");
-      this._populateFromAccount();
     }
 
+    // ── UI Construction ──────────────────────────────────────────────────────
+
     _buildUI() {
-      const content = new St.BoxLayout({
+      // Root container
+      const root = new St.BoxLayout({
         vertical: true,
-        styleClass: "totp-dialog-content",
+        style_class: "totp-dialog-root",
+        x_expand: true,
       });
 
-      // Title
-      const title = new St.Label({
-        text: this._editingAccount ? "Edit Account" : "Add Account",
-        styleClass: "totp-dialog-title",
-      });
-      content.add_child(title);
-
-      // Tab buttons
-      const tabBox = new St.BoxLayout({
-        styleClass: "totp-dialog-tabs",
+      // ── Title bar ─────────────────────────────────────────────────────────
+      const titleBar = new St.BoxLayout({
+        style_class: "totp-dialog-titlebar",
+        x_expand: true,
       });
 
-      this._manualTabBtn = new St.Button({
-        label: "Manual Entry",
-        styleClass: "totp-dialog-tab totp-dialog-tab-active",
+      const titleIcon = new St.Icon({
+        icon_name: "security-high-symbolic",
+        style_class: "totp-dialog-icon",
       });
-      this._manualTabBtn.connect("clicked", () => this._switchTab("manual"));
-      tabBox.add_child(this._manualTabBtn);
+      titleBar.add_child(titleIcon);
 
-      content.add_child(tabBox);
-
-      // QR Scanning - Coming Soon (blocked)
-      const comingSoonBox = new St.BoxLayout({
-        vertical: true,
-        styleClass: "totp-coming-soon-box",
+      const titleStack = new St.BoxLayout({ vertical: true });
+      this._titleLabel = new St.Label({
+        text: "Add Account",
+        style_class: "totp-dialog-title",
       });
-      const comingSoonLabel = new St.Label({
-        text: "📱 QR Code Scanning - Coming Soon",
-        styleClass: "totp-coming-soon-label",
+      this._subtitleLabel = new St.Label({
+        text: "TOTP / Two-factor authentication",
+        style_class: "totp-dialog-subtitle",
       });
-      comingSoonBox.add_child(comingSoonLabel);
-      content.add_child(comingSoonBox);
+      titleStack.add_child(this._titleLabel);
+      titleStack.add_child(this._subtitleLabel);
+      titleBar.add_child(titleStack);
+      root.add_child(titleBar);
 
-      // Manual Tab content
-      this._manualTab = new St.BoxLayout({
-        vertical: true,
-        styleClass: "totp-tab-content",
-      });
-      this._manualTab.hide();
+      // Separator
+      root.add_child(new St.Widget({ style_class: "totp-separator", x_expand: true }));
 
-      // Issuer field
-      const issuerLabel = new St.Label({
-        text: "Service/Issuer:",
-        styleClass: "totp-field-label",
-      });
-      this._manualTab.add_child(issuerLabel);
+      // ── Coming soon pill ───────────────────────────────────────────────────
+      const pill = new St.BoxLayout({ style_class: "totp-coming-soon-pill" });
+      pill.add_child(new St.Label({
+        text: "📱  QR Code Scanning — Coming Soon",
+        style_class: "totp-coming-soon-label",
+      }));
+      root.add_child(pill);
 
-      this._issuerEntry = new St.Entry({
-        hint_text: "e.g., Google, GitHub",
-        styleClass: "totp-entry",
-        can_focus: true,
-      });
-      this._issuerEntry.connect("text-changed", () => this._onIssuerChanged());
-      this._manualTab.add_child(this._issuerEntry);
+      // ── Section header ─────────────────────────────────────────────────────
+      root.add_child(new St.Label({
+        text: "MANUAL ENTRY",
+        style_class: "totp-section-divider",
+      }));
 
-      // Logo preview
+      // ── Row 1: Issuer | Account ────────────────────────────────────────────
+      const row1 = new St.BoxLayout({ style_class: "totp-form-row", x_expand: true });
+
+      const issuerCell = this._makeCell("SERVICE / ISSUER");
+      this._issuerEntry = this._makeEntry("e.g. Google, GitHub");
+      this._issuerEntry.clutter_text.connect("text-changed", () => this._onIssuerChanged());
+      issuerCell.add_child(this._issuerEntry);
+
+      // Logo preview inline under issuer
       this._logoPreview = new St.Bin({
         style_class: "totp-logo-preview",
         visible: false,
+        x_align: Clutter.ActorAlign.START,
       });
-      this._manualTab.add_child(this._logoPreview);
+      issuerCell.add_child(this._logoPreview);
 
-      // Account label field
-      const labelLabel = new St.Label({
-        text: "Account (email/username):",
-        styleClass: "totp-field-label",
-      });
-      this._manualTab.add_child(labelLabel);
+      const labelCell = this._makeCell("ACCOUNT");
+      this._labelEntry = this._makeEntry("e.g. user@example.com");
+      labelCell.add_child(this._labelEntry);
 
-      this._labelEntry = new St.Entry({
-        hint_text: "e.g., user@example.com",
-        styleClass: "totp-entry",
+      row1.add_child(issuerCell);
+      row1.add_child(labelCell);
+      root.add_child(row1);
+
+      // ── Row 2: Site URL | Secret ───────────────────────────────────────────
+      const row2 = new St.BoxLayout({ style_class: "totp-form-row", x_expand: true });
+
+      const siteCell = this._makeCell("SITE URL (OPTIONAL)");
+      this._siteUrlEntry = this._makeEntry("https://google.com");
+      this._siteUrlEntry.clutter_text.connect("text-changed", () => this._onSiteUrlChanged());
+      siteCell.add_child(this._siteUrlEntry);
+
+      const secretCell = this._makeCell("SECRET KEY (BASE32)");
+      this._secretEntry = this._makeEntry("JBSWY3DPEHPK3PXP");
+      this._secretEntry.clutter_text.set_password_char("\u2022"); // show as dots
+
+      // Toggle secret visibility
+      this._secretToggle = new St.Button({
+        label: "Show",
+        style_class: "totp-dropdown-button",
+        reactive: true,
         can_focus: true,
       });
-      this._manualTab.add_child(this._labelEntry);
-
-      // Site URL field
-      const siteUrlLabel = new St.Label({
-        text: "Site URL (optional):",
-        styleClass: "totp-field-label",
+      this._secretVisible = false;
+      this._secretToggle.connect("clicked", () => {
+        this._secretVisible = !this._secretVisible;
+        this._secretEntry.clutter_text.set_password_char(
+          this._secretVisible ? "\0" : "\u2022"
+        );
+        this._secretToggle.set_label(this._secretVisible ? "Hide" : "Show");
       });
-      this._manualTab.add_child(siteUrlLabel);
+      const secretRow = new St.BoxLayout({ style_class: "totp-secret-row", x_expand: true });
+      secretRow.add_child(this._secretEntry);
+      secretRow.add_child(this._secretToggle);
+      secretCell.add_child(secretRow);
 
-      this._siteUrlEntry = new St.Entry({
-        hint_text: "e.g., https://google.com or google.com",
-        styleClass: "totp-entry",
-        can_focus: true,
-      });
-      this._siteUrlEntry.connect("text-changed", () =>
-        this._onSiteUrlChanged(),
-      );
-      this._manualTab.add_child(this._siteUrlEntry);
+      row2.add_child(siteCell);
+      row2.add_child(secretCell);
+      root.add_child(row2);
 
-      const siteUrlHint = new St.Label({
-        text: "Website URL for logo retrieval and reference",
-        styleClass: "totp-hint-text",
-      });
-      this._manualTab.add_child(siteUrlHint);
+      // ── Row 3: Algorithm | Digits | Period ────────────────────────────────
+      const row3 = new St.BoxLayout({ style_class: "totp-form-row", x_expand: true });
 
-      // Secret field (Field 3)
-      const secretLabel = new St.Label({
-        text: "Secret Key (Base32):",
-        styleClass: "totp-field-label",
-      });
-      this._manualTab.add_child(secretLabel);
+      // Algorithm
+      const algoCell = this._makeCell("ALGORITHM");
+      this._algorithmDropdown = this._makeDropdown("SHA1 ▾", () => this._cycleAlgorithm());
+      algoCell.add_child(this._algorithmDropdown);
 
-      this._secretEntry = new St.Entry({
-        hint_text: "JBSWY3DPEHPK3PXP",
-        styleClass: "totp-entry",
-        can_focus: true,
-        x_expand: true,
-      });
-      this._manualTab.add_child(this._secretEntry);
+      // Digits
+      const digitsCell = this._makeCell("DIGITS");
+      this._digitsDropdown = this._makeDropdown("6 ▾", () => this._cycleDigits());
+      digitsCell.add_child(this._digitsDropdown);
 
-      const secretHint = new St.Label({
-        text: "Required: Base32 encoded string (usually provided by the service)",
-        styleClass: "totp-hint-text",
-      });
-      this._manualTab.add_child(secretHint);
+      // Period
+      const periodCell = this._makeCell("PERIOD (SEC)");
+      this._periodDropdown = this._makeDropdown("30 ▾", () => this._cyclePeriod());
+      periodCell.add_child(this._periodDropdown);
 
-      // Algorithm selection (Field 4)
-      const algorithmLabel = new St.Label({
-        text: "Algorithm:",
-        styleClass: "totp-field-label",
-      });
-      this._manualTab.add_child(algorithmLabel);
+      row3.add_child(algoCell);
+      row3.add_child(digitsCell);
+      row3.add_child(periodCell);
+      root.add_child(row3);
 
-      const algorithmBox = new St.BoxLayout({
-        styleClass: "totp-algorithm-box",
-      });
-
-      this._algorithmDropdown = new St.Button({
-        label: "SHA1",
-        styleClass: "totp-dropdown-button",
-        can_focus: true,
-        x_expand: true,
-      });
-      this._selectedAlgorithm = "SHA1";
-      this._updateAlgorithmLabel();
-      this._algorithmDropdown.connect("clicked", () =>
-        this._showAlgorithmMenu(),
-      );
-      algorithmBox.add_child(this._algorithmDropdown);
-      this._manualTab.add_child(algorithmBox);
-
-      const algorithmHint = new St.Label({
-        text: "Click to cycle through: SHA1 → SHA256 → SHA512",
-        styleClass: "totp-hint-text",
-      });
-      this._manualTab.add_child(algorithmHint);
-
-      // Code Length dropdown (Digits field)
-      const digitsLabel = new St.Label({
-        text: "Code Length (digits):",
-        styleClass: "totp-field-label",
-      });
-      this._manualTab.add_child(digitsLabel);
-
-      const digitsBox = new St.BoxLayout({
-        styleClass: "totp-digits-box",
-      });
-
-      this._digitsDropdown = new St.Button({
-        label: "6",
-        styleClass: "totp-dropdown-button",
+      // ── Primary action button ──────────────────────────────────────────────
+      this._submitBtn = new St.Button({
+        label: "Add Account",
+        style_class: "totp-btn-primary",
+        reactive: true,
         can_focus: true,
         x_expand: true,
       });
-      this._selectedDigits = 6;
-      this._updateDigitsLabel();
-      this._digitsDropdown.connect("clicked", () => this._showDigitsMenu());
-      digitsBox.add_child(this._digitsDropdown);
-      this._manualTab.add_child(digitsBox);
-
-      const digitsHint = new St.Label({
-        text: "Click to toggle: 6 ↔ 8 digits",
-        styleClass: "totp-hint-text",
+      this._submitBtn.connect("clicked", () => {
+        // Guard: prevent double-tap while async is running
+        if (this._busy) return;
+        this._onAddManual().catch((e) => {
+          logError(e, "[TOTP] _onAddManual unhandled");
+          this._setStatus(`Unexpected error: ${e.message}`, "error");
+          this._setBusy(false);
+        });
       });
-      this._manualTab.add_child(digitsHint);
+      root.add_child(this._submitBtn);
 
-      // Time Period dropdown (Field 6)
-      const periodLabel = new St.Label({
-        text: "Time Period (seconds):",
-        styleClass: "totp-field-label",
-      });
-      this._manualTab.add_child(periodLabel);
-
-      const periodBox = new St.BoxLayout({
-        styleClass: "totp-period-box",
-      });
-
-      this._periodDropdown = new St.Button({
-        label: "30",
-        styleClass: "totp-dropdown-button",
-        can_focus: true,
-        x_expand: true,
-      });
-      this._selectedPeriod = 30;
-      this._updatePeriodLabel();
-      this._periodDropdown.connect("clicked", () => this._showPeriodMenu());
-      periodBox.add_child(this._periodDropdown);
-      this._manualTab.add_child(periodBox);
-
-      const periodHint = new St.Label({
-        text: "Click to cycle: 30 → 60 seconds",
-        styleClass: "totp-hint-text",
-      });
-      this._manualTab.add_child(periodHint);
-
-      // Save button
-      this._addManualBtn = new St.Button({
-        label: this._editingAccount ? "Save Changes" : "Add Account",
-        styleClass: "totp-dialog-button totp-dialog-button-primary",
-      });
-      this._addManualBtn.connect("clicked", () => this._onAddManual());
-      this._manualTab.add_child(this._addManualBtn);
-
-      content.add_child(this._manualTab);
-
-      // Status message
+      // ── Status label ───────────────────────────────────────────────────────
       this._statusLabel = new St.Label({
         text: "",
-        styleClass: "totp-dialog-status",
+        style_class: "totp-status",
+        x_expand: true,
       });
-      content.add_child(this._statusLabel);
+      root.add_child(this._statusLabel);
 
-      this.contentLayout.add_child(content);
+      this.contentLayout.add_child(root);
 
-      // Close button
+      // ── Dialog footer button ───────────────────────────────────────────────
       this.addButton({
-        label: "Close",
+        label: "Cancel",
         action: () => this.close(),
+        key: Clutter.KEY_Escape,
       });
     }
 
-    _switchTab(tab) {
-      this._currentTab = tab;
+    // ── Small factory helpers ─────────────────────────────────────────────────
 
-      // Only manual entry is available now
-      this._manualTab.show();
-      this._manualTabBtn.add_style_class_name("totp-dialog-tab-active");
+    _makeCell(labelText) {
+      const cell = new St.BoxLayout({ vertical: true, x_expand: true });
+      cell.add_child(new St.Label({
+        text: labelText,
+        style_class: "totp-field-label",
+      }));
+      return cell;
     }
+
+    _makeEntry(hint) {
+      return new St.Entry({
+        hint_text: hint,
+        style_class: "totp-entry",
+        can_focus: true,
+        x_expand: true,
+      });
+    }
+
+    _makeDropdown(label, onClick) {
+      const btn = new St.Button({
+        label,
+        style_class: "totp-dropdown-button",
+        can_focus: true,
+        reactive: true,
+        x_expand: true,
+      });
+      btn.connect("clicked", onClick);
+      return btn;
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /** Call before open() to switch to edit mode. */
+    setAccount(account) {
+      this._editingAccount = account;
+      this._titleLabel.set_text("Edit Account");
+      this._subtitleLabel.set_text("Update your TOTP account details");
+      this._submitBtn.set_label("Save Changes");
+      this._populateFromAccount();
+    }
+
+    // ── Populate fields from existing account ─────────────────────────────────
 
     _populateFromAccount() {
-      if (!this._editingAccount) {
-        return;
-      }
+      const a = this._editingAccount;
+      if (!a) return;
 
-      const account = this._editingAccount;
-      this._issuerEntry.set_text(account.issuer || "");
-      this._labelEntry.set_text(account.label || "");
-      this._siteUrlEntry.set_text(account.siteUrl || "");
-      this._selectedAlgorithm = account.algorithm || "SHA1";
-      this._selectedDigits = account.digits || 6;
-      this._selectedPeriod = account.period || 30;
+      entrySetText(this._issuerEntry, a.issuer ?? "");
+      entrySetText(this._labelEntry,  a.label  ?? "");
+      entrySetText(this._siteUrlEntry, a.siteUrl ?? "");
 
-      this._secretEntry.set_text("");
+      // Secret: keep empty — hint explains behaviour
+      entrySetText(this._secretEntry, "");
       this._secretEntry.hint_text = "Leave blank to keep existing secret";
 
-      if (account.logoUrl) {
-        this._selectedLogoUrl = account.logoUrl;
-        this._showLogoPreview(account.logoUrl);
-      }
+      this._selectedAlgorithm = a.algorithm ?? "SHA1";
+      this._selectedDigits    = a.digits    ?? 6;
+      this._selectedPeriod    = a.period    ?? 30;
 
-      this._updateAlgorithmLabel();
-      this._updateDigitsLabel();
-      this._updatePeriodLabel();
+      this._refreshDropdownLabels();
+
+      if (a.logoUrl) {
+        this._selectedLogoUrl = a.logoUrl;
+        this._showLogoPreview(a.logoUrl);
+      }
     }
 
-    _onIssuerChanged() {
-      const issuer = this._issuerEntry.text.trim();
+    // ── Logo fetching ──────────────────────────────────────────────────────────
 
-      // Clear existing timeout
+    _onIssuerChanged() {
+      const issuer = entryGetText(this._issuerEntry).trim();
+      this._scheduleLogo(issuer ? () => this._fetchLogo(issuer, null) : null);
+    }
+
+    _onSiteUrlChanged() {
+      const url    = entryGetText(this._siteUrlEntry).trim();
+      const issuer = entryGetText(this._issuerEntry).trim();
+
+      if (url) {
+        this._scheduleLogo(() => this._fetchLogo(null, url));
+      } else if (issuer.length >= 2) {
+        this._scheduleLogo(() => this._fetchLogo(issuer, null));
+      } else {
+        this._scheduleLogo(null);
+      }
+    }
+
+    _scheduleLogo(fn) {
       if (this._logoFetchTimeoutId) {
         GLib.source_remove(this._logoFetchTimeoutId);
         this._logoFetchTimeoutId = 0;
       }
-
-      if (!issuer || issuer.length < 2) {
+      if (!fn) {
         this._logoPreview.visible = false;
         this._selectedLogoUrl = null;
         return;
       }
-
-      // Debounce logo fetching
-      this._logoFetchTimeoutId = GLib.timeout_add(
-        GLib.PRIORITY_DEFAULT,
-        500,
-        () => {
-          this._logoFetchTimeoutId = 0;
-          this._fetchLogo(issuer, null);
-          return GLib.SOURCE_REMOVE;
-        },
-      );
-    }
-
-    _onSiteUrlChanged() {
-      const siteUrl = this._siteUrlEntry.text.trim();
-
-      // Clear existing timeout
-      if (this._logoFetchTimeoutId) {
-        GLib.source_remove(this._logoFetchTimeoutId);
+      this._logoFetchTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
         this._logoFetchTimeoutId = 0;
-      }
-
-      if (!siteUrl) {
-        // If site URL is empty, try fetching from issuer
-        const issuer = this._issuerEntry.text.trim();
-        if (issuer && issuer.length >= 2) {
-          this._logoFetchTimeoutId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT,
-            500,
-            () => {
-              this._logoFetchTimeoutId = 0;
-              this._fetchLogo(issuer, null);
-              return GLib.SOURCE_REMOVE;
-            },
-          );
-        } else {
-          this._logoPreview.visible = false;
-          this._selectedLogoUrl = null;
-        }
-        return;
-      }
-
-      // Debounce logo fetching with site URL
-      this._logoFetchTimeoutId = GLib.timeout_add(
-        GLib.PRIORITY_DEFAULT,
-        500,
-        () => {
-          this._logoFetchTimeoutId = 0;
-          this._fetchLogo(null, siteUrl);
-          return GLib.SOURCE_REMOVE;
-        },
-      );
+        fn();
+        return GLib.SOURCE_REMOVE;
+      });
     }
 
     async _fetchLogo(issuer, siteUrl) {
       try {
-        const logoUrl = await LogoFetcher.fetchLogoUrl(siteUrl || issuer);
-        const currentIssuer = this._issuerEntry.text.trim();
-        const currentSiteUrl = this._siteUrlEntry.text.trim();
+        const logoUrl = await LogoFetcher.fetchLogoUrl(siteUrl ?? issuer);
 
-        // Only update if the input hasn't changed
-        if (
-          (siteUrl && currentSiteUrl === siteUrl) ||
-          (issuer && currentIssuer === issuer)
-        ) {
-          if (logoUrl) {
-            this._selectedLogoUrl = logoUrl;
-            this._showLogoPreview(logoUrl);
-          }
+        // Stale-check: input must not have changed while we were awaiting
+        const curIssuer = entryGetText(this._issuerEntry).trim();
+        const curUrl    = entryGetText(this._siteUrlEntry).trim();
+        const stale = siteUrl
+          ? curUrl !== siteUrl
+          : curIssuer !== issuer;
+        if (stale) return;
+
+        if (logoUrl) {
+          this._selectedLogoUrl = logoUrl;
+          this._showLogoPreview(logoUrl);
         }
-      } catch (e) {
-        // Silently fail
+      } catch (_) {
+        // Silently ignore logo fetch failures
       }
     }
 
-    _showLogoPreview(logoUrl) {
+    _showLogoPreview(_logoUrl) {
       try {
-        // For now, show a simple icon placeholder
-        // Full image loading would require more complex handling
-        this._logoPreview.child = new St.Icon({
-          icon_name: "document-properties-symbolic",
-          icon_size: 48,
+        this._logoPreview.set_child(new St.Icon({
+          icon_name: "security-high-symbolic",
+          icon_size: 18,
           style_class: "totp-logo-icon",
-        });
+        }));
         this._logoPreview.visible = true;
-      } catch (e) {
+      } catch (_) {
         this._logoPreview.visible = false;
       }
     }
 
-    _updateAlgorithmLabel() {
-      this._algorithmDropdown.set_label(`${this._selectedAlgorithm} ▼`);
+    // ── Dropdown cycling ───────────────────────────────────────────────────────
+
+    _cycleAlgorithm() {
+      const opts  = ["SHA1", "SHA256", "SHA512"];
+      const idx   = opts.indexOf(this._selectedAlgorithm);
+      this._selectedAlgorithm = opts[(idx + 1) % opts.length];
+      this._algorithmDropdown.set_label(`${this._selectedAlgorithm} ▾`);
     }
 
-    _updateDigitsLabel() {
-      this._digitsDropdown.set_label(`${this._selectedDigits} ▼`);
+    _cycleDigits() {
+      const opts = [6, 7, 8];
+      const idx  = opts.indexOf(this._selectedDigits);
+      this._selectedDigits = opts[(idx + 1) % opts.length];
+      this._digitsDropdown.set_label(`${this._selectedDigits} ▾`);
     }
 
-    _updatePeriodLabel() {
-      this._periodDropdown.set_label(`${this._selectedPeriod} ▼`);
+    _cyclePeriod() {
+      const opts = [30, 60];
+      const idx  = opts.indexOf(this._selectedPeriod);
+      this._selectedPeriod = opts[(idx + 1) % opts.length];
+      this._periodDropdown.set_label(`${this._selectedPeriod} ▾`);
     }
 
-    _showAlgorithmMenu() {
-      // Simple algorithm selection - cycle through options
-      const algorithms = ["SHA1", "SHA256", "SHA512"];
-      const currentIndex = algorithms.indexOf(this._selectedAlgorithm);
-      const nextIndex = (currentIndex + 1) % algorithms.length;
-      this._selectedAlgorithm = algorithms[nextIndex];
-      this._updateAlgorithmLabel();
+    _refreshDropdownLabels() {
+      this._algorithmDropdown.set_label(`${this._selectedAlgorithm} ▾`);
+      this._digitsDropdown.set_label(`${this._selectedDigits} ▾`);
+      this._periodDropdown.set_label(`${this._selectedPeriod} ▾`);
     }
 
-    _showDigitsMenu() {
-      // Cycle between 6 and 8 digits
-      const digits = [6, 8];
-      const currentIndex = digits.indexOf(this._selectedDigits);
-      const nextIndex = (currentIndex + 1) % digits.length;
-      this._selectedDigits = digits[nextIndex];
-      this._updateDigitsLabel();
+    // ── Status helpers ────────────────────────────────────────────────────────
+
+    _setStatus(text, kind = "neutral") {
+      // kind: "neutral" | "ok" | "error"
+      this._statusLabel.set_text(text);
+      this._statusLabel.remove_style_class_name("totp-status-error");
+      this._statusLabel.remove_style_class_name("totp-status-ok");
+      if (kind === "error") this._statusLabel.add_style_class_name("totp-status-error");
+      if (kind === "ok")    this._statusLabel.add_style_class_name("totp-status-ok");
     }
 
-    _showPeriodMenu() {
-      // Cycle between 30 and 60 seconds
-      const periods = [30, 60];
-      const currentIndex = periods.indexOf(this._selectedPeriod);
-      const nextIndex = (currentIndex + 1) % periods.length;
-      this._selectedPeriod = periods[nextIndex];
-      this._updatePeriodLabel();
+    _setBusy(busy) {
+      this._busy = busy;
+      this._submitBtn.reactive = !busy;
+      // Dim the button while working
+      this._submitBtn.opacity = busy ? 140 : 255;
     }
 
-    // QR Scanning methods - COMING SOON (commented out)
-    /*
-    async _onScanScreen() {
-        this._statusLabel.text = 'Select screen area with QR code...';
-
-        try {
-            const result = await QRScanner.scanScreenArea();
-            await this._handleQRResult(result);
-        } catch (e) {
-            this._statusLabel.text = `Error: ${e.message}`;
-        }
-    }
-
-    async _onScanCamera() {
-        this._statusLabel.text = 'Scanning with camera... (Press Ctrl+C to cancel)';
-
-        try {
-            const result = await QRScanner.scanCamera();
-            await this._handleQRResult(result);
-        } catch (e) {
-            this._statusLabel.text = `Error: ${e.message}`;
-        }
-    }
-
-    async _onUploadFile() {
-        // Check for available file picker
-        const hasZenity = QRScanner.isProgramAvailable('zenity');
-        const hasKdialog = QRScanner.isProgramAvailable('kdialog');
-
-        if (!hasZenity && !hasKdialog) {
-            this._statusLabel.text = 'Error: Install zenity (or kdialog) to use file picker. Run: sudo apt install zenity';
-            return;
-        }
-
-        // Temporarily close this dialog to allow file picker to work
-        this.close();
-
-        try {
-            let proc;
-            if (hasZenity) {
-                proc = Gio.Subprocess.new(
-                    ['zenity', '--file-selection', '--title=Select QR Code Image', '--file-filter=Images | *.png *.jpg *.jpeg *.gif *.bmp *.webp'],
-                    Gio.SubprocessFlags.STDOUT_PIPE
-                );
-            } else {
-                proc = Gio.Subprocess.new(
-                    ['kdialog', '--getopenfilename', '', 'Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)'],
-                    Gio.SubprocessFlags.STDOUT_PIPE
-                );
-            }
-
-            const [success, stdout, stderr] = await proc.communicate_utf8_async(null, null);
-
-            // Always reopen the dialog first
-            this.open();
-
-            if (!success || !stdout.trim()) {
-                this._statusLabel.text = 'File selection cancelled';
-                return;
-            }
-
-            const filePath = stdout.trim();
-            log(`[TOTP] Selected file: ${filePath}`);
-
-            this._statusLabel.text = 'Scanning image...';
-
-            const result = await QRScanner.scanFile(filePath);
-            log(`[TOTP] QR scan result: ${result}`);
-            await this._handleQRResult(result);
-        } catch (e) {
-            log(`[TOTP] File upload error: ${e.message}`);
-            this.open();
-            this._statusLabel.text = `Error: ${e.message}`;
-        }
-    }
-
-    async _handleQRResult(uri) {
-        try {
-            const params = parseOtpauthUri(uri);
-            if (!params) {
-                this._statusLabel.text = 'Invalid QR code format';
-                return;
-            }
-
-            this._statusLabel.text = `Adding ${params.issuer || 'account'}...`;
-
-            await AccountManager.addAccount({
-                label: params.label || '',
-                issuer: params.issuer || '',
-                secret: params.secret,
-                algorithm: params.algorithm || 'SHA1',
-                digits: params.digits || 6,
-                period: params.period || 30,
-            });
-
-            this._statusLabel.text = 'Account added successfully!';
-            this.emit('account-added');
-
-            // Close after a short delay
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-                this.close();
-                return GLib.SOURCE_REMOVE;
-            });
-        } catch (e) {
-            this._statusLabel.text = `Error: ${e.message}`;
-        }
-    }
-    */
+    // ── Main submit handler ────────────────────────────────────────────────────
 
     async _onAddManual() {
-      const issuer = this._issuerEntry.get_text().trim();
-      const label = this._labelEntry.get_text().trim();
-      const siteUrl = this._siteUrlEntry.get_text().trim();
-      const secret = this._secretEntry.get_text().trim().replace(/\s/g, "");
-      const algorithm = this._selectedAlgorithm || "SHA1";
-      const digits = this._selectedDigits || 6;
-      const period = this._selectedPeriod || 30;
+      // ── Read & sanitise inputs ──────────────────────────────────────────────
+      const issuer    = entryGetText(this._issuerEntry).trim();
+      const label     = entryGetText(this._labelEntry).trim();
+      const siteUrl   = entryGetText(this._siteUrlEntry).trim();
+      const rawSecret = entryGetText(this._secretEntry).trim();
+      const secret    = rawSecret.replace(/\s+/g, "").toUpperCase();
 
+      const algorithm = this._selectedAlgorithm ?? "SHA1";
+      const digits    = this._selectedDigits    ?? 6;
+      const period    = this._selectedPeriod    ?? 30;
+
+      // ── Validation ─────────────────────────────────────────────────────────
       if (!this._editingAccount && !secret) {
-        this._statusLabel.text = "Secret key is required";
+        this._setStatus("Secret key is required.", "error");
+        return;
+      }
+      if (secret && !/^[A-Z2-7]+=*$/.test(secret)) {
+        this._setStatus("Secret must be a valid Base32 string.", "error");
+        return;
+      }
+      if (!issuer && !label) {
+        this._setStatus("Please enter at least a service name or account.", "error");
         return;
       }
 
-      try {
-        const accountData = {
-          label,
-          issuer: issuer || "Unknown",
-          siteUrl: siteUrl || null,
-          algorithm,
-          digits,
-          period,
-          logoUrl: this._selectedLogoUrl || null,
-        };
+      // ── Build payload ───────────────────────────────────────────────────────
+      const accountData = {
+        label:    label,
+        issuer:   issuer || "Unknown",
+        siteUrl:  siteUrl  || null,
+        algorithm,
+        digits,
+        period,
+        logoUrl:  this._selectedLogoUrl || null,
+      };
 
+      this._setBusy(true);
+
+      try {
         if (this._editingAccount) {
-          this._statusLabel.text = "Saving changes...";
-          await AccountManager.updateAccountWithSecret(
+          // ── Edit mode ────────────────────────────────────────────────────
+          this._setStatus("Saving changes…");
+          log(`[TOTP] Updating account id=${this._editingAccount.id}`);
+
+          const ok = await AccountManager.updateAccountWithSecret(
             this._editingAccount.id,
             accountData,
-            secret || null,
+            secret || null,   // null = keep existing secret
           );
-          this._statusLabel.text = "Account updated successfully!";
+          log(`[TOTP] updateAccountWithSecret → ${ok}`);
+
+          this._setStatus("Account updated successfully.", "ok");
           this.emit("account-updated");
+
         } else {
-          this._statusLabel.text = "Adding account...";
-          await AccountManager.addAccount({
-            ...accountData,
-            secret,
-          });
-          this._statusLabel.text = "Account added successfully!";
+          // ── Add mode ─────────────────────────────────────────────────────
+          this._setStatus("Adding account…");
+          log(`[TOTP] Adding new account issuer=${accountData.issuer}`);
+
+          await AccountManager.addAccount({ ...accountData, secret });
+
+          this._setStatus("Account added successfully.", "ok");
           this.emit("account-added");
         }
 
-        // Clear fields
-        this._issuerEntry.set_text("");
-        this._labelEntry.set_text("");
-        this._siteUrlEntry.set_text("");
-        this._secretEntry.set_text("");
-        this._logoPreview.visible = false;
-        this._selectedLogoUrl = null;
+        // Reset fields
+        this._resetFields();
 
-        // Close after a short delay
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+        // Auto-close after a short confirmation delay
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 900, () => {
           this.close();
           return GLib.SOURCE_REMOVE;
         });
+
       } catch (e) {
-        this._statusLabel.text = `Error: ${e.message}`;
+        logError(e, "[TOTP] _onAddManual");
+        this._setStatus(`Error: ${e.message}`, "error");
+        this._setBusy(false);   // re-enable button on error so user can retry
       }
+    }
+
+    // ── Reset ─────────────────────────────────────────────────────────────────
+
+    _resetFields() {
+      entrySetText(this._issuerEntry,  "");
+      entrySetText(this._labelEntry,   "");
+      entrySetText(this._siteUrlEntry, "");
+      entrySetText(this._secretEntry,  "");
+      this._logoPreview.visible = false;
+      this._selectedLogoUrl = null;
+      this._setBusy(false);
+    }
+
+    // ── Cleanup ────────────────────────────────────────────────────────────────
+
+    destroy() {
+      if (this._logoFetchTimeoutId) {
+        GLib.source_remove(this._logoFetchTimeoutId);
+        this._logoFetchTimeoutId = 0;
+      }
+      super.destroy();
     }
   },
 );
