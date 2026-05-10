@@ -96,8 +96,7 @@ sudo pacman -S zbar
 
 ### Managing Accounts
 
-- Click the **three-dot menu** on any account for options: Edit, Delete, Move Up, Move Down
-- You can also **right-click** any account to open the same options
+- **Right-click** any account for options: Edit, Delete, Move Up, Move Down
 - Accounts can be sorted by Manual order, Alphabetical, or Last Used
 
 ### Preferences

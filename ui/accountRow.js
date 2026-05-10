@@ -160,21 +160,6 @@ export const AccountRow = GObject.registerClass(
       this._copyButton.connect("clicked", () => this._onCopyClicked());
       actionsBox.add_child(this._copyButton);
 
-      // Account management menu
-      this._menuButton = new St.Button({
-        style_class: "totp-menu-button",
-        child: new St.Icon({
-          icon_name: "view-more-symbolic",
-          icon_size: 16,
-        }),
-        y_align: Clutter.ActorAlign.CENTER,
-        x_align: Clutter.ActorAlign.CENTER,
-        reactive: true,
-        can_focus: true,
-      });
-      this._menuButton.connect("clicked", () => this._toggleContextMenu());
-      actionsBox.add_child(this._menuButton);
-
       this.add_child(actionsBox);
     }
 
@@ -260,15 +245,6 @@ export const AccountRow = GObject.registerClass(
         }
         return Clutter.EVENT_PROPAGATE;
       });
-    }
-
-    _toggleContextMenu() {
-      if (this._contextMenu?.isOpen) {
-        this._contextMenu.close();
-        return;
-      }
-
-      this._showContextMenu(this._menuButton);
     }
 
     /**
