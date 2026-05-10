@@ -105,6 +105,10 @@
     color: white;
 }
 
+.totp-account-avatar-logo {
+    icon-size: 24px;
+}
+
 /* ── Account Info ── */
 .totp-account-info {
     spacing: 2px;
@@ -595,6 +599,7 @@
 }
 
 .totp-logo-icon {
+    icon-size: 18px;
     color: rgba(26, 115, 232, 0.7);
 }
 

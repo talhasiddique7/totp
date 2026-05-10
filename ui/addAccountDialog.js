@@ -59,6 +59,8 @@ export const AddAccountDialog = GObject.registerClass(
 
       this._editingAccount    = null;
       this._selectedLogoUrl   = null;
+      this._selectedLogoPath  = null;
+      this._selectedLogoSource = null;
       this._logoFetchTimeoutId = 0;
       this._selectedAlgorithm = "SHA1";
       this._selectedDigits    = 6;
@@ -304,9 +306,11 @@ export const AddAccountDialog = GObject.registerClass(
 
       this._refreshDropdownLabels();
 
-      if (a.logoUrl) {
+      if (a.logoUrl || a.logoPath) {
         this._selectedLogoUrl = a.logoUrl;
-        this._showLogoPreview(a.logoUrl);
+        this._selectedLogoPath = a.logoPath ?? null;
+        this._selectedLogoSource = a.siteUrl || a.issuer || null;
+        this._showLogoPreview(a.logoPath || a.logoUrl);
       }
     }
 
@@ -314,7 +318,13 @@ export const AddAccountDialog = GObject.registerClass(
 
     _onIssuerChanged() {
       const issuer = entryGetText(this._issuerEntry).trim();
-      this._scheduleLogo(issuer ? () => this._fetchLogo(issuer, null) : null);
+      const url = entryGetText(this._siteUrlEntry).trim();
+
+      if (url) {
+        this._scheduleLogo(() => this._fetchLogo(null, url));
+      } else {
+        this._scheduleLogo(issuer ? () => this._fetchLogo(issuer, null) : null);
+      }
     }
 
     _onSiteUrlChanged() {
@@ -338,6 +348,8 @@ export const AddAccountDialog = GObject.registerClass(
       if (!fn) {
         this._logoPreview.visible = false;
         this._selectedLogoUrl = null;
+        this._selectedLogoPath = null;
+        this._selectedLogoSource = null;
         return;
       }
       this._logoFetchTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
@@ -348,8 +360,9 @@ export const AddAccountDialog = GObject.registerClass(
     }
 
     async _fetchLogo(issuer, siteUrl) {
+      const source = siteUrl ?? issuer;
       try {
-        const logoUrl = await LogoFetcher.fetchLogoUrl(siteUrl ?? issuer);
+        const logo = await LogoFetcher.fetchLogo(source);
 
         // Stale-check: input must not have changed while we were awaiting
         const curIssuer = entryGetText(this._issuerEntry).trim();
@@ -359,21 +372,38 @@ export const AddAccountDialog = GObject.registerClass(
           : curIssuer !== issuer;
         if (stale) return;
 
-        if (logoUrl) {
-          this._selectedLogoUrl = logoUrl;
-          this._showLogoPreview(logoUrl);
+        if (logo?.url) {
+          this._selectedLogoUrl = logo.url;
+          this._selectedLogoPath = logo.path ?? null;
+          this._selectedLogoSource = source;
+          this._showLogoPreview(logo.path || logo.url);
         }
       } catch (_) {
         // Silently ignore logo fetch failures
       }
     }
 
-    _showLogoPreview(_logoUrl) {
+    _showLogoPreview(logoRef) {
       try {
-        this._logoPreview.set_child(new St.Icon({
-          icon_name: "security-high-symbolic",
+        const iconProps = {
           icon_size: 18,
           style_class: "totp-logo-icon",
+        };
+
+        if (logoRef && !String(logoRef).startsWith("http")) {
+          const file = Gio.File.new_for_path(logoRef);
+          if (!file.query_exists(null)) {
+            throw new Error("Logo file does not exist");
+          }
+          iconProps.gicon = new Gio.FileIcon({
+            file,
+          });
+        } else {
+          iconProps.icon_name = "image-x-generic-symbolic";
+        }
+
+        this._logoPreview.set_child(new St.Icon({
+          ...iconProps,
         }));
         this._logoPreview.visible = true;
       } catch (_) {
@@ -441,6 +471,7 @@ export const AddAccountDialog = GObject.registerClass(
       const algorithm = this._selectedAlgorithm ?? "SHA1";
       const digits    = this._selectedDigits    ?? 6;
       const period    = this._selectedPeriod    ?? 30;
+      const logoSource = siteUrl || issuer;
 
       // ── Validation ─────────────────────────────────────────────────────────
       if (!this._editingAccount && !secret) {
@@ -456,6 +487,19 @@ export const AddAccountDialog = GObject.registerClass(
         return;
       }
 
+      // Ensure a just-entered URL has a chance to resolve before persisting.
+      if (logoSource && (this._selectedLogoSource !== logoSource || !this._selectedLogoPath)) {
+        this._setBusy(true);
+        this._setStatus("Fetching logo…");
+        const logo = await LogoFetcher.fetchLogo(logoSource);
+        if (logo?.url) {
+          this._selectedLogoUrl = logo.url;
+          this._selectedLogoPath = logo.path ?? null;
+          this._selectedLogoSource = logoSource;
+          this._showLogoPreview(logo.path || logo.url);
+        }
+      }
+
       // ── Build payload ───────────────────────────────────────────────────────
       const accountData = {
         label:    label,
@@ -465,6 +509,7 @@ export const AddAccountDialog = GObject.registerClass(
         digits,
         period,
         logoUrl:  this._selectedLogoUrl || null,
+        logoPath: this._selectedLogoPath || null,
       };
 
       this._setBusy(true);
@@ -521,6 +566,8 @@ export const AddAccountDialog = GObject.registerClass(
       entrySetText(this._secretEntry,  "");
       this._logoPreview.visible = false;
       this._selectedLogoUrl = null;
+      this._selectedLogoPath = null;
+      this._selectedLogoSource = null;
       this._setBusy(false);
     }
 

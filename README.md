@@ -11,6 +11,7 @@ A native TOTP (Time-Based One-Time Password) authenticator extension for the GNO
 - **🔒 Secure Storage** — Secrets stored exclusively in GNOME Keyring (never on disk)
 - **⏱ Countdown Timer** — Visual countdown arc with color transitions (blue → amber → red)
 - **🔍 Search** — Quickly filter accounts when you have many
+- **🏷 Account Logos** — Fetches and caches service favicons when a site URL is provided
 - **🎨 Customizable** — Configurable fonts, colors, popup width, and sort order
 - **🛡 Screen Lock Integration** — Auto-closes popup when screen locks
 
@@ -112,7 +113,7 @@ Or click the ⚙ gear icon in the popup header.
 
 - **Secrets** are stored exclusively in **GNOME Keyring** — never written to disk
 - **Clipboard** is automatically cleared 30 seconds after copying a code
-- **No network access** — all TOTP generation is completely local
+- **Local code generation** — TOTP generation stays local; optional logo fetching only downloads service favicons
 - **Screen lock integration** — popup closes when the screen locks
 - **No logging** — secrets are never printed to console or journal
 

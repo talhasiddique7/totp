@@ -79,12 +79,9 @@ export const AccountRow = GObject.registerClass(
         x_align: Clutter.ActorAlign.CENTER,
       });
 
-      // Try to load logo, fallback to letter avatar
-      if (this._account.logoUrl) {
-        this._setLogoAvatar(this._account.logoUrl);
-      } else {
+      const logoRef = this._account.logoPath || this._account.logoUrl;
+      if (!this._setLogoAvatar(logoRef)) {
         this._setLetterAvatar();
-        // Try to fetch logo asynchronously
         this._fetchAndSetLogo();
       }
 
@@ -469,27 +466,23 @@ export const AccountRow = GObject.registerClass(
      * Set avatar with a logo image.
      * @private
      */
-    _setLogoAvatar(logoUrl) {
-      try {
-        const icon = new St.Icon({
-          gicon: logoUrl.startsWith("http")
-            ? null
-            : Gio.icon_new_for_string(logoUrl),
-          icon_size: 32,
-        });
+    _setLogoAvatar(logoRef) {
+      if (!logoRef || String(logoRef).startsWith("http")) {
+        return false;
+      }
 
-        // For URLs, use a custom image actor
-        if (logoUrl.startsWith("http")) {
-          // Remote icon loading is intentionally conservative in Shell UI.
-          this._avatar.child = new St.Icon({
-            icon_name: "document-properties-symbolic",
-            icon_size: 32,
-          });
-        } else {
-          this._avatar.child = icon;
-        }
+      try {
+        const file = Gio.File.new_for_path(logoRef);
+        if (!file.query_exists(null)) return false;
+
+        this._avatar.child = new St.Icon({
+          gicon: new Gio.FileIcon({ file }),
+          icon_size: 24,
+          style_class: "totp-account-avatar-logo",
+        });
+        return true;
       } catch (e) {
-        this._setLetterAvatar();
+        return false;
       }
     }
 
@@ -516,12 +509,21 @@ export const AccountRow = GObject.registerClass(
     async _fetchAndSetLogo() {
       try {
         // Use siteUrl if available, otherwise use issuer
-        const logoUrl = await LogoFetcher.fetchLogoUrl(
+        const logo = await LogoFetcher.fetchLogo(
           this._account.siteUrl || this._account.issuer,
         );
-        if (logoUrl && !this._isDestroyed) {
-          this._account.logoUrl = logoUrl;
-          this._setLogoAvatar(logoUrl);
+        if (logo?.url && !this._isDestroyed) {
+          this._account.logoUrl = logo.url;
+          this._account.logoPath = logo.path ?? null;
+
+          if (logo.path) {
+            this._setLogoAvatar(logo.path);
+          }
+
+          AccountManager.updateAccount(this._account.id, {
+            logoUrl: logo.url,
+            logoPath: logo.path ?? null,
+          });
         }
       } catch (e) {
         // Silently fail, keep letter avatar
