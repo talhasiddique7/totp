@@ -160,6 +160,21 @@ export const AccountRow = GObject.registerClass(
       this._copyButton.connect("clicked", () => this._onCopyClicked());
       actionsBox.add_child(this._copyButton);
 
+      // Account management menu
+      this._menuButton = new St.Button({
+        style_class: "totp-menu-button",
+        child: new St.Icon({
+          icon_name: "view-more-symbolic",
+          icon_size: 16,
+        }),
+        y_align: Clutter.ActorAlign.CENTER,
+        x_align: Clutter.ActorAlign.CENTER,
+        reactive: true,
+        can_focus: true,
+      });
+      this._menuButton.connect("clicked", () => this._toggleContextMenu());
+      actionsBox.add_child(this._menuButton);
+
       this.add_child(actionsBox);
     }
 
@@ -236,27 +251,44 @@ export const AccountRow = GObject.registerClass(
      * @private
      */
     _setupContextMenu() {
-      // Use a PopupMenu for context actions
+      this._contextMenuManager = new PopupMenu.PopupMenuManager(this);
+
       this.connect("button-press-event", (actor, event) => {
         if (event.get_button() === Clutter.BUTTON_SECONDARY) {
-          this._showContextMenu(event);
+          this._showContextMenu(this);
           return Clutter.EVENT_STOP;
         }
         return Clutter.EVENT_PROPAGATE;
       });
     }
 
+    _toggleContextMenu() {
+      if (this._contextMenu?.isOpen) {
+        this._contextMenu.close();
+        return;
+      }
+
+      this._showContextMenu(this._menuButton);
+    }
+
     /**
-     * Show context menu at cursor position.
+     * Show account actions menu.
      * @private
      */
-    _showContextMenu(event) {
-      // Create a simple context menu using GNOME Shell's popup menu system
+    _showContextMenu(sourceActor) {
       if (this._contextMenu) {
         this._contextMenu.destroy();
       }
 
-      this._contextMenu = new PopupMenu.PopupMenu(this, 0.5, St.Side.TOP);
+      this._contextMenu = new PopupMenu.PopupMenu(sourceActor, 0.5, St.Side.TOP);
+      this._contextMenu.actor.add_style_class_name("totp-account-menu");
+      this._contextMenu.actor.hide();
+      this._contextMenu.connect("open-state-changed", (_menu, isOpen) => {
+        if (!isOpen && this._contextMenu) {
+          this._contextMenu.destroy();
+          this._contextMenu = null;
+        }
+      });
 
       const editItem = new PopupMenu.PopupMenuItem("Edit Account");
       editItem.connect("activate", () => {
@@ -287,6 +319,7 @@ export const AccountRow = GObject.registerClass(
       this._contextMenu.addMenuItem(deleteItem);
 
       Main.uiGroup.add_child(this._contextMenu.actor);
+      this._contextMenuManager.addMenu(this._contextMenu);
       this._contextMenu.open();
     }
 

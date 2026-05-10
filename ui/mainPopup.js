@@ -185,16 +185,24 @@ class MainPopup extends St.BoxLayout {
                 row.connect('account-edit', (_w, id) => this._onEditAccount(id));
                 row.connect('account-delete', (_w, id) => this._onDeleteAccount(id));
                 row.connect('account-move-up', (_w, id) => {
+                    this._useManualSort();
                     AccountManager.moveAccountUp(id);
                     this.refreshAccounts();
                 });
                 row.connect('account-move-down', (_w, id) => {
+                    this._useManualSort();
                     AccountManager.moveAccountDown(id);
                     this.refreshAccounts();
                 });
                 this._accountList.add_child(row);
                 this._accountRows.push(row);
             }
+        }
+    }
+
+    _useManualSort() {
+        if (this._settings && this._settings.get_string('sort-order') !== 'manual') {
+            this._settings.set_string('sort-order', 'manual');
         }
     }
 
